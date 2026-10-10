@@ -1,4 +1,4 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.app.Activity;
 import android.os.Bundle;

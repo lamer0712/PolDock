@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.oemtools.mirrorfold'
+    namespace 'com.oemtools.poldock'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'com.oemtools.mirrorfold'
+        applicationId 'com.oemtools.poldock'
         // targetSdk 22 이하 → 설치 시 SYSTEM_ALERT_WINDOW 자동 부여 (Android 12 동작).
         // 폴스타4엔 오버레이 허용 설정 화면이 없어 이 방식으로 권한을 받는다.
         minSdk 22
