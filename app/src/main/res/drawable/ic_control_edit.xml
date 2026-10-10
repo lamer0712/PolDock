@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 런처(com.ecarx.car.launcher) 편집 버튼 아이콘 ic_control_edit 과 동일 -->
+<vector android:height="48dp" android:width="48dp" android:viewportWidth="48.0" android:viewportHeight="48.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <group>
+        <clip-path android:pathData="M0,0h48v48h-48z" />
+        <path android:fillColor="#ffffff" android:pathData="M42.91,3.443L44.557,5.09L13.118,36.529L11.471,36.529L11.471,34.881L42.91,3.443ZM9.141,33.917L9.141,38.858L14.083,38.858L47.852,5.09L42.91,0.148L9.141,33.917Z" android:fillType="evenOdd" />
+        <path android:fillColor="#ffffff" android:pathData="M34.866,3.43H0V48.001H44.571V13.119L42.286,15.405V45.715H2.286V5.715H32.58L34.866,3.43ZM44.571,3.456V3.43H44.545L44.571,3.456Z" android:fillType="evenOdd" />
+    </group>
+</vector>
