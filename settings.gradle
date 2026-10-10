@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "MirrorFoldOverlay"
+rootProject.name = "PolDock"
 include ':app'
