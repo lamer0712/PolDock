@@ -83,6 +83,7 @@ public class OverlayService extends Service {
     private boolean hasVehWidget;
     private boolean gridActive;
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
+    private EditPanel editPanel;     // 독 위 편집 패널
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -1280,13 +1281,10 @@ public class OverlayService extends Service {
         Toast.makeText(this, m, Toast.LENGTH_LONG).show();
     }
 
+    /** 독 위에서 바로 편집하는 패널 열기 (별도 설정 화면 없이) */
     private void openApp() {
-        try {
-            Intent i = new Intent(this, MainActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-        } catch (Exception ignored) {
-        }
+        if (editPanel == null) editPanel = new EditPanel(this);
+        editPanel.show();
     }
 
     // ---------------------------------------------------------------- 홈(런처)에서만 표시
@@ -1522,6 +1520,7 @@ public class OverlayService extends Service {
         stopVehicle();
         ui.removeCallbacks(fgTick);
         if (sp != null) sp.unregisterOnSharedPreferenceChangeListener(prefListener);
+        if (editPanel != null) editPanel.hide();
         if (wm != null && dock != null) {
             try {
                 wm.removeView(dock);
