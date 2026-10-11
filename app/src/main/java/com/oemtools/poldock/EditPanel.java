@@ -473,13 +473,14 @@ public class EditPanel {
         n.setPadding(Ui.dp(c, 2), Ui.dp(c, 10), Ui.dp(c, 2), 0);
         card.addView(n);
 
-        // 홈 화면 자동 감지는 '사용정보 접근'이 필요 — 아직 꺼져 있을 때만 안내 버튼 표시
-        if (!hasUsageAccess()) {
-            card.addView(Ui.button(c, "🔎 홈 화면 자동 감지 켜기 (사용정보 접근)", Ui.GREY,
+        // 홈 자동 감지는 접근성 서비스로 — 꺼져 있을 때만 안내 버튼 표시
+        if (!detectionOn()) {
+            card.addView(Ui.button(c, "🔎 홈 화면 자동 감지 켜기", Ui.GREY,
                     v -> launchAndClose(new Intent(
-                            android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS))));
+                            android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))));
             card.addView(Ui.fieldLabel(c,
-                    "이걸 켜야 홈 화면과 다른 앱을 구분해 독 모습이 자동으로 바뀌어요."));
+                    "접근성 설정에서 'PolDock'을 켜면 홈 화면과 다른 앱을 구분해 독이 자동으로 바뀌어요. "
+                            + "현재 떠 있는 앱만 확인하고 화면 내용은 읽지 않아요."));
         }
         return card;
     }
@@ -488,7 +489,16 @@ public class EditPanel {
         sp.edit().putString(ShortcutStore.KEY_EDIT_MODE, m).apply();
     }
 
-    private boolean hasUsageAccess() {
+    /** 홈 감지 가능 상태 (접근성 서비스 켜짐 또는 사용정보 접근 허용) */
+    private boolean detectionOn() {
+        if (FgAccessibilityService.running) return true;
+        try {
+            String flat = android.provider.Settings.Secure.getString(
+                    svc.getContentResolver(),
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (flat != null && flat.contains(svc.getPackageName() + "/")) return true;
+        } catch (Throwable ignored) {
+        }
         try {
             android.app.AppOpsManager ao =
                     (android.app.AppOpsManager) svc.getSystemService(Context.APP_OPS_SERVICE);

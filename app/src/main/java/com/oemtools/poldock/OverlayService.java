@@ -295,7 +295,7 @@ public class OverlayService extends Service {
             if ("bottom".equals(sp.getString(ShortcutStore.KEY_GRID_POS, "top")))
                 lp.y = gdm.heightPixels - insetBottom() - lp.height;
             else
-                lp.y = 0;
+                lp.y = insetTop();   // 상단은 상태바 아래에 (너무 올라가지 않게)
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -354,7 +354,7 @@ public class OverlayService extends Service {
         // 홈 프로필 사용 + 자동(편집 아님) + 사용정보 접근 시 포그라운드 따라 모드 전환
         if (sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)
                 && "auto".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto"))
-                && hasUsageAccess()) {
+                && (notifAccessOn() || hasUsageAccess() || FgAccessibilityService.running)) {
             ui.post(fgTick);
         }
 
@@ -1508,6 +1508,9 @@ public class OverlayService extends Service {
     }
 
     private String foregroundPackage() {
+        // 접근성 서비스가 켜져 있으면 그 값 우선 (사용정보 접근 불필요)
+        if (FgAccessibilityService.running && FgAccessibilityService.lastPackage != null)
+            return FgAccessibilityService.lastPackage;
         try {
             android.app.usage.UsageStatsManager usm =
                     (android.app.usage.UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
@@ -1529,10 +1532,27 @@ public class OverlayService extends Service {
         }
     }
 
+    /** 내비(TMAP 등)가 떠 있는지 — 활성 알림 패키지로 판단 */
+    private boolean drivingAppActive() {
+        for (String p : NotifListener.activePackages()) {
+            if (p == null) continue;
+            String lp = p.toLowerCase(java.util.Locale.US);
+            if (lp.contains("tmap")                       // T맵 계열
+                    || "com.skt.skaf.l001mtm091".equals(p)   // 구형 T map
+                    || lp.contains("navi")) return true;
+        }
+        return false;
+    }
+
     private void updateHomeMode() {
-        String top = foregroundPackage();
-        if (top != null) lastFgPkg = top;
-        homeFgNow = lastFgPkg != null && homePackages().contains(lastFgPkg);
+        if (notifAccessOn()) {
+            // 알림 접근으로 TMAP(내비) 실행 감지: 떠 있으면 '다른앱'(default), 아니면 '홈'
+            homeFgNow = !drivingAppActive();
+        } else {
+            String top = foregroundPackage();
+            if (top != null) lastFgPkg = top;
+            homeFgNow = lastFgPkg != null && homePackages().contains(lastFgPkg);
+        }
         String want = activeMode();
         if (!want.equals(mode)) {
             // 그리드 상태에서 홈을 벗어나면: 세로형 + 우측 센터로 전환
@@ -1556,8 +1576,8 @@ public class OverlayService extends Service {
     private void clampSize(int dockW, int dockH) {
         if (dock == null) return;
         DisplayMetrics dm = realMetrics();
-        int m = gridActive ? 0 : d(2);   // 그리드는 벽에 딱 붙게 여백 0
-        int minX = m, minY = gridActive ? 0 : insetTop();
+        int m = gridActive ? 0 : d(2);   // 그리드는 좌우/하단 벽에 딱 붙게 여백 0
+        int minX = m, minY = insetTop();   // 상단은 상태바 아래 유지
         int maxX = dm.widthPixels - dockW - m;
         int maxY = dm.heightPixels - insetBottom() - dockH - m;
         if (maxX < minX) maxX = minX;

@@ -57,6 +57,20 @@
             android:name=".OverlayService"
             android:exported="false" />
 
+        <!-- 포그라운드 앱 감지(홈/다른앱 구분) — 접근성 설정에서 켜면 동작 -->
+        <service
+            android:name=".FgAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/fg_accessibility_config" />
+        </service>
+
         <!-- 시동(부팅) 완료 시 독 자동 실행 -->
         <receiver
             android:name=".BootReceiver"
