@@ -85,6 +85,7 @@ public class OverlayService extends Service {
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
     private EditPanel editPanel;     // 독 위 편집 패널
     private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
+    private static final int SNAP_EDGE_DP = 56;   // 벽 스냅 발동 범위 (손가락 두께 정도)
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -1407,7 +1408,7 @@ public class OverlayService extends Service {
             int dLeft = lp.x;
             int dRight = sw - (lp.x + w);
             int min = Math.min(Math.min(dTop, dBottom), Math.min(dLeft, dRight));
-            int thresh = Math.round(Math.min(sw, sh) * 0.14f);
+            int thresh = px(SNAP_EDGE_DP);   // 벽 발동 범위 ≈ 성인 손가락 두께
             if (min <= thresh) {
                 if (min == dTop) { target = "h"; edge = "top"; }
                 else if (min == dBottom) { target = "h"; edge = "bottom"; }
