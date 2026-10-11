@@ -40,7 +40,9 @@ public class EditPanel {
             (p, k) -> {
                 if (k == null || !showing || body == null) return;
                 // 드래그 좌표/크기 슬라이더는 패널을 다시 그리지 않음 (슬라이더 끊김 방지)
-                if ("x".equals(k) || "y".equals(k) || k.startsWith(ShortcutStore.KEY_SCALE)) return;
+                if ("x".equals(k) || "y".equals(k)
+                        || k.startsWith(ShortcutStore.KEY_SCALE)
+                        || ShortcutStore.KEY_ALPHA.equals(k)) return;
                 populate();
             };
 
@@ -223,6 +225,34 @@ public class EditPanel {
             lp.topMargin = Ui.dp(c, 4);
             card.addView(seek, lp);
         }
+
+        // 투명도 (가로/세로 전용 — 그리드는 항상 불투명 고정)
+        if ("g".equals(ori)) {
+            card.addView(Ui.fieldLabel(c, "그리드는 항상 불투명으로 고정됩니다."));
+            return card;
+        }
+        int apct = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);
+        final TextView alphaLabel = Ui.fieldLabel(c, "독 불투명도: " + apct + "%");
+        card.addView(alphaLabel);
+        SeekBar aseek = new SeekBar(c);
+        aseek.setMax(80);                               // 20~100 → 0~80
+        aseek.setProgress(Math.max(0, Math.min(80, apct - 20)));
+        aseek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar s, int p, boolean u) {
+                int v = p + 20;
+                alphaLabel.setText("독 불투명도: " + v + "%");
+                if (sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA) != v)
+                    sp.edit().putInt(ShortcutStore.KEY_ALPHA, v).apply();
+            }
+            public void onStartTrackingTouch(SeekBar s) {
+            }
+            public void onStopTrackingTouch(SeekBar s) {
+            }
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.topMargin = Ui.dp(c, 4);
+        card.addView(aseek, alp);
         return card;
     }
 

@@ -33,6 +33,9 @@ public class ShortcutStore {
 
     static final String KEY_SCALE = "dock_scale"; // 퍼센트 50~200
     static final int DEFAULT_SCALE = 150;
+    static final String KEY_ALPHA = "dock_alpha"; // 불투명도 퍼센트 20~100
+    static final int DEFAULT_ALPHA = 100;
+    static final String KEY_AUTOSTART = "autostart"; // 시동(부팅) 시 자동 실행
     static final String KEY_WIDGET_ORDER = "widget_order";
     static final String KEY_HOME_PROFILE = "home_profile"; // 홈(런처)에서 별도 배치 사용
     static final String KEY_EDIT_MODE = "edit_mode";       // 설정 편집 대상: auto/default/home

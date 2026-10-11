@@ -86,7 +86,6 @@ public class OverlayService extends Service {
     private EditPanel editPanel;     // 독 위 편집 패널
     private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
     private static final int SNAP_EDGE_DP = 50;   // 벽 스냅 발동 범위 (손가락 두께 정도)
-    private int pivotCx, pivotCy;    // 배치 전환 시 제자리 피벗 기준 중심
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -137,6 +136,14 @@ public class OverlayService extends Service {
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (prefs, key) -> {
                 if (key == null) return;
+                // 위치 저장(x/y)은 이미 updateViewLayout 으로 반영됨 → 재구성 불필요 (전환 시 깜빡/이동 방지)
+                if (KEY_X.equals(key) || KEY_Y.equals(key)
+                        || (KEY_X + "_home").equals(key) || (KEY_Y + "_home").equals(key)) return;
+                if (ShortcutStore.KEY_ALPHA.equals(key)) {   // 투명도는 재구성 없이 즉시 적용
+                    if (dock != null) dock.setAlpha(dockAlpha());
+                    return;
+                }
+                if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
                 if (ShortcutStore.KEY.equals(key)) {
                     if (gridActive) installDock(); else rebuildShortcuts();
                 } else installDock();
@@ -200,6 +207,7 @@ public class OverlayService extends Service {
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.windowAnimations = 0;   // 창 전환 애니메이션 끔 (확인용)
         lp.x = sp.getInt(KEY_X, d(24));
         lp.y = sp.getInt(KEY_Y, d(60));
         installDock();
@@ -328,7 +336,10 @@ public class OverlayService extends Service {
         if (weatherIconView != null || dustView != null) ui.post(envTick);
         if (musicArt != null) ui.post(musicTick);
         ui.removeCallbacks(fgTick);
-        if (dock != null) dock.setVisibility(View.VISIBLE);
+        if (dock != null) {
+            dock.setVisibility(View.VISIBLE);
+            dock.setAlpha(dockAlpha());
+        }
         // 홈 프로필 사용 + 자동(편집 아님) + 사용정보 접근 시 포그라운드 따라 모드 전환
         if (sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)
                 && "auto".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto"))
@@ -475,6 +486,19 @@ public class OverlayService extends Service {
                 barBg.setColor(0xDD111111);
                 barBg.setStroke(d(1), 0x55FFFFFF);
             }
+        }
+        // 재구성 직후 측정값으로 '먼저' 클램프 → 전환 시 드롭위치에 그렸다가 화면 안으로 튀는 2-pass 제거
+        if (pendingSnapEdge == null) {
+            DisplayMetrics dmc = realMetrics();
+            int wSpec = lp.width > 0
+                    ? View.MeasureSpec.makeMeasureSpec(lp.width, View.MeasureSpec.EXACTLY)
+                    : View.MeasureSpec.makeMeasureSpec(dmc.widthPixels, View.MeasureSpec.AT_MOST);
+            int hSpec = lp.height > 0
+                    ? View.MeasureSpec.makeMeasureSpec(lp.height, View.MeasureSpec.EXACTLY)
+                    : View.MeasureSpec.makeMeasureSpec(dmc.heightPixels, View.MeasureSpec.AT_MOST);
+            dock.measure(wSpec, hSpec);
+            clampSize(dock.getMeasuredWidth(), dock.getMeasuredHeight());
+            wm.updateViewLayout(dock, lp);
         }
         dock.post(() -> {
             applyDockCorner();
@@ -1370,8 +1394,12 @@ public class OverlayService extends Service {
 
     private void clamp() {
         if (dock == null) return;
+        clampSize(dock.getWidth(), dock.getHeight());
+    }
+
+    private void clampSize(int dockW, int dockH) {
+        if (dock == null) return;
         DisplayMetrics dm = realMetrics();
-        int dockW = dock.getWidth(), dockH = dock.getHeight();
         int minX = d(2), minY = insetTop();
         int maxX = dm.widthPixels - dockW - d(2);
         int maxY = dm.heightPixels - insetBottom() - dockH - d(2);
@@ -1386,51 +1414,70 @@ public class OverlayService extends Service {
     // ---------------------------------------------------------------- 드래그 스냅(자석 배치)
 
     /** 손을 뗀 위치에 따라 배치(가로/세로/그리드)를 바꾸고 벽/타일에 붙인다. */
+    /** 손 뗀 뒤 스냅 (그리드 타일에만). */
     private void snapAfterDrag() {
+        applySnapFromPosition();
+    }
+
+    /**
+     * 현재 독 위치로 배치/스냅 판정.
+     * @param onlyOriChange true면 '배치가 실제로 바뀌는 경우(그리드 포함)'에만 발동 (드래그 중 실시간용).
+     * @return 무언가 적용되면 true.
+     */
+    /**
+     * 손 뗀 위치로 판정.
+     * - 홈 런처 최우측 타일 헤더 → 그리드로 '위치 스냅'(타일에 붙임).
+     * - 상단 밴드 → 가로, 좌측 밴드 → 세로로 '자동 전환'하되 위치는 제자리 피벗(벽 스냅 없음).
+     * - 그 외 → 전환/스냅 없이 위치만 저장.
+     */
+    private void applySnapFromPosition() {
         if (dock == null) return;
         DisplayMetrics dm = realMetrics();
         int sw = dm.widthPixels, sh = dm.heightPixels;
         int w = dock.getWidth(), h = dock.getHeight();
         int it = insetTop(), ib = insetBottom();
-        int cx = lp.x + w / 2, cy = lp.y + h / 2;
-        pivotCx = cx;
-        pivotCy = cy;
 
         String curOri = sp.getString(mk(KEY_ORI), "h");
-        String target = curOri;
-        String edge = null;
 
-        // 1) 홈 화면 + 우측 타일 영역 → 그리드
-        if (homeFgNow && "home".equals(mode) && cx > sw * 0.58f) {
-            target = "g";
-            edge = (cy < sh / 2) ? "gridTop" : "gridBottom";
-        } else {
-            // 2) 가장 가까운 벽: 상/하 = 가로, 좌/우 = 세로
-            int dTop = lp.y - it;
-            int dBottom = (sh - ib) - (lp.y + h);
-            int dLeft = lp.x;
-            int dRight = sw - (lp.x + w);
-            int min = Math.min(Math.min(dTop, dBottom), Math.min(dLeft, dRight));
-            int thresh = px(SNAP_EDGE_DP);   // 벽 발동 범위 ≈ 성인 손가락 두께
-            if (min <= thresh) {
-                if (min == dTop) { target = "h"; edge = "top"; }
-                else if (min == dBottom) { target = "h"; edge = "bottom"; }
-                else if (min == dLeft) { target = "v"; edge = "left"; }
-                else { target = "v"; edge = "right"; }
+        // 1) 홈 화면 + 최우측 타일 헤더 영역 → 그리드 '위치 스냅'
+        int tileW = px(GRID_TILE_W_DP), tileH = px(GRID_TILE_H_DP);
+        int headerH = px(CARD_ICON_DP + CARD_ICON_MARGIN_DP * 2);
+        int colX0 = sw - tileW - d(8);
+        int probeX = lp.x + w / 2;
+        int probeY = lp.y + Math.min(h, headerH) / 2;
+        int botTileTop = sh - ib - tileH;
+        boolean inRightCol = homeFgNow && "home".equals(mode) && probeX >= colX0;
+        String gridEdge = null;
+        if (inRightCol && probeY <= it + headerH) gridEdge = "gridTop";
+        else if (inRightCol && probeY >= botTileTop && probeY <= botTileTop + headerH) gridEdge = "gridBottom";
+
+        if (gridEdge != null) {
+            if (!"g".equals(curOri)) {
+                pendingSnapEdge = gridEdge;
+                sp.edit().putString(mk(KEY_ORI), "g")
+                        .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+            } else {
+                applySnapEdge(gridEdge);
             }
+            return;
         }
 
-        if (!target.equals(curOri)) {
-            // 배치가 바뀌면 재구성 후 제자리에서 피벗 → 새 크기 기준으로 붙인다.
-            // 현재(드롭) 위치를 함께 저장해 재구성 때 초기 위치로 튀지 않게 함.
-            pendingSnapEdge = edge;
-            sp.edit().putString(mk(KEY_ORI), target)
-                    .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();   // -> prefListener -> installDock
-        } else if (edge != null) {
-            applySnapEdge(edge);   // 배치 그대로면 즉시 붙임
-        } else {
-            sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+        // 2) 상단 밴드 = 가로, 좌측 밴드 = 세로 (자동 전환, 위치는 제자리 피벗)
+        int thresh = px(SNAP_EDGE_DP);
+        int dTop = lp.y - it, dLeft = lp.x;
+        String target = curOri;
+        if (Math.min(dTop, dLeft) <= thresh) {
+            target = (dTop <= dLeft) ? "h" : "v";
         }
+        if (!target.equals(curOri)) {
+            // 자동 전환: 좌상단(손잡이 쪽) 위치를 그대로 두고 방향만 바꿈 — 위치 스냅/이동 없음
+            sp.edit().putString(mk(KEY_ORI), target)
+                    .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+            return;
+        }
+
+        // 3) 전환 없음: 위치만 저장
+        sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
     }
 
     /** 현재 크기 기준으로 지정한 벽/타일에 붙이고 위치 저장. */
@@ -1441,12 +1488,6 @@ public class OverlayService extends Service {
         int w = dock.getWidth(), h = dock.getHeight();
         int it = insetTop(), ib = insetBottom();
         switch (edge) {
-            // 가로형: 벽(상/하)에 붙이고, 수평은 드롭 지점 중심 유지 → 제자리 피벗
-            case "top":    lp.y = it + d(2);            lp.x = pivotCx - w / 2; break;
-            case "bottom": lp.y = sh - ib - h - d(2);   lp.x = pivotCx - w / 2; break;
-            // 세로형: 벽(좌/우)에 붙이고, 수직은 드롭 지점 중심 유지 → 제자리 피벗
-            case "left":   lp.x = d(2);                 lp.y = pivotCy - h / 2; break;
-            case "right":  lp.x = sw - w - d(2);        lp.y = pivotCy - h / 2; break;
             case "gridTop":    lp.x = sw - w - d(4); lp.y = it + d(4); break;
             case "gridBottom": lp.x = sw - w - d(4); lp.y = sh - ib - h - d(4); break;
         }
@@ -1543,6 +1584,7 @@ public class OverlayService extends Service {
                     touchY = e.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
+                    // 드래그 중엔 손가락만 따라감 (재구성/전환 없음 → 항상 매끄럽게)
                     lp.x = startX + (int) (e.getRawX() - touchX);
                     lp.y = startY + (int) (e.getRawY() - touchY);
                     clamp();
@@ -1551,7 +1593,7 @@ public class OverlayService extends Service {
                 case MotionEvent.ACTION_UP:
                     clamp();
                     wm.updateViewLayout(dock, lp);
-                    snapAfterDrag();   // 벽/영역에 따라 배치 전환 + 스냅
+                    snapAfterDrag();   // 손 뗄 때: 그리드 타일 영역이면 스냅, 아니면 위치 저장
                     return true;
             }
             return false;
@@ -1582,6 +1624,13 @@ public class OverlayService extends Service {
     /** SCALE 무시한 순수 dp→px (런처 치수 그대로 맞출 때 사용) */
     private int px(int dp) {
         return Math.round(dp * getResources().getDisplayMetrics().density);
+    }
+
+    /** 독 불투명도 0.2~1.0 (그리드는 항상 불투명 고정) */
+    private float dockAlpha() {
+        if (gridActive) return 1f;
+        int a = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);
+        return Math.max(20, Math.min(100, a)) / 100f;
     }
 
     /** 현재 모드/크기에 맞춰 독 코너 반경 적용 (그리드=각진 사각, 그 외=macOS 독 비율) */
