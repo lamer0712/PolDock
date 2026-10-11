@@ -84,6 +84,7 @@ public class OverlayService extends Service {
     private boolean gridActive;
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
     private EditPanel editPanel;     // 독 위 편집 패널
+    private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -475,8 +476,14 @@ public class OverlayService extends Service {
         }
         dock.post(() -> {
             applyDockCorner();
-            clamp();
-            wm.updateViewLayout(dock, lp);
+            if (pendingSnapEdge != null) {
+                String e = pendingSnapEdge;
+                pendingSnapEdge = null;
+                applySnapEdge(e);        // 새 크기 기준으로 벽에 붙임
+            } else {
+                clamp();
+                wm.updateViewLayout(dock, lp);
+            }
         });
 
         if (hasVehWidget) startVehicle();
@@ -1345,7 +1352,16 @@ public class OverlayService extends Service {
         if (top != null) lastFgPkg = top;
         homeFgNow = lastFgPkg != null && homePackages().contains(lastFgPkg);
         String want = activeMode();
-        if (!want.equals(mode)) installDock();   // 모드 바뀌면 그 모드의 배치로 재구성
+        if (!want.equals(mode)) {
+            // 그리드 상태에서 홈을 벗어나면: 세로형 + 우측 센터로 전환
+            boolean leavingHomeFromGrid = "home".equals(mode) && "default".equals(want) && gridActive;
+            installDock();   // 모드 바뀌면 그 모드의 배치로 재구성 (mode=want로 갱신됨)
+            if (leavingHomeFromGrid) {
+                if (!"v".equals(sp.getString(mk(KEY_ORI), "h")))
+                    sp.edit().putString(mk(KEY_ORI), "v").apply();   // default 배치=세로
+                moveToRightCenter();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 위치 제한
@@ -1363,6 +1379,86 @@ public class OverlayService extends Service {
         if (lp.x > maxX) lp.x = maxX;
         if (lp.y < minY) lp.y = minY;
         if (lp.y > maxY) lp.y = maxY;
+    }
+
+    // ---------------------------------------------------------------- 드래그 스냅(자석 배치)
+
+    /** 손을 뗀 위치에 따라 배치(가로/세로/그리드)를 바꾸고 벽/타일에 붙인다. */
+    private void snapAfterDrag() {
+        if (dock == null) return;
+        DisplayMetrics dm = realMetrics();
+        int sw = dm.widthPixels, sh = dm.heightPixels;
+        int w = dock.getWidth(), h = dock.getHeight();
+        int it = insetTop(), ib = insetBottom();
+        int cx = lp.x + w / 2, cy = lp.y + h / 2;
+
+        String curOri = sp.getString(mk(KEY_ORI), "h");
+        String target = curOri;
+        String edge = null;
+
+        // 1) 홈 화면 + 우측 타일 영역 → 그리드
+        if (homeFgNow && "home".equals(mode) && cx > sw * 0.58f) {
+            target = "g";
+            edge = (cy < sh / 2) ? "gridTop" : "gridBottom";
+        } else {
+            // 2) 가장 가까운 벽: 상/하 = 가로, 좌/우 = 세로
+            int dTop = lp.y - it;
+            int dBottom = (sh - ib) - (lp.y + h);
+            int dLeft = lp.x;
+            int dRight = sw - (lp.x + w);
+            int min = Math.min(Math.min(dTop, dBottom), Math.min(dLeft, dRight));
+            int thresh = Math.round(Math.min(sw, sh) * 0.14f);
+            if (min <= thresh) {
+                if (min == dTop) { target = "h"; edge = "top"; }
+                else if (min == dBottom) { target = "h"; edge = "bottom"; }
+                else if (min == dLeft) { target = "v"; edge = "left"; }
+                else { target = "v"; edge = "right"; }
+            }
+        }
+
+        if (!target.equals(curOri)) {
+            // 배치가 바뀌면 재구성 후 새 크기 기준으로 붙인다
+            pendingSnapEdge = edge;
+            sp.edit().putString(mk(KEY_ORI), target).apply();   // -> prefListener -> installDock
+        } else if (edge != null) {
+            applySnapEdge(edge);   // 배치 그대로면 즉시 붙임
+        } else {
+            sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+        }
+    }
+
+    /** 현재 크기 기준으로 지정한 벽/타일에 붙이고 위치 저장. */
+    private void applySnapEdge(String edge) {
+        if (dock == null || edge == null) return;
+        DisplayMetrics dm = realMetrics();
+        int sw = dm.widthPixels, sh = dm.heightPixels;
+        int w = dock.getWidth(), h = dock.getHeight();
+        int it = insetTop(), ib = insetBottom();
+        switch (edge) {
+            case "top":    lp.y = it + d(2); break;
+            case "bottom": lp.y = sh - ib - h - d(2); break;
+            case "left":   lp.x = d(2); break;
+            case "right":  lp.x = sw - w - d(2); break;
+            case "gridTop":    lp.x = sw - w - d(4); lp.y = it + d(4); break;
+            case "gridBottom": lp.x = sw - w - d(4); lp.y = sh - ib - h - d(4); break;
+        }
+        clamp();
+        wm.updateViewLayout(dock, lp);
+        sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+    }
+
+    /** 세로형으로 화면 우측 세로 중앙에 배치. */
+    private void moveToRightCenter() {
+        if (dock == null) return;
+        dock.post(() -> {
+            DisplayMetrics dm = realMetrics();
+            int w = dock.getWidth(), h = dock.getHeight();
+            lp.x = dm.widthPixels - w - d(4);
+            lp.y = (dm.heightPixels - h) / 2;
+            clamp();
+            wm.updateViewLayout(dock, lp);
+            sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+        });
     }
 
     private int insetTop() {
@@ -1447,7 +1543,7 @@ public class OverlayService extends Service {
                 case MotionEvent.ACTION_UP:
                     clamp();
                     wm.updateViewLayout(dock, lp);
-                    sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+                    snapAfterDrag();   // 벽/영역에 따라 배치 전환 + 스냅
                     return true;
             }
             return false;
