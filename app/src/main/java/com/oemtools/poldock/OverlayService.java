@@ -164,7 +164,7 @@ public class OverlayService extends Service {
     private final Runnable musicTick = new Runnable() {
         public void run() {
             updateMusic();
-            ui.postDelayed(this, 3000);
+            ui.postDelayed(this, 1200);
         }
     };
     private final Runnable hazardTick = new Runnable() {
@@ -764,6 +764,10 @@ public class OverlayService extends Service {
                 if (target == null) target = mc;
             }
             if (target != null) target.getTransportControls().skipToNext();
+            // 곡 바뀐 직후 앨범아트를 빠르게 따라잡기
+            ui.postDelayed(this::updateMusic, 150);
+            ui.postDelayed(this::updateMusic, 500);
+            ui.postDelayed(this::updateMusic, 1000);
         } catch (Throwable ignored) {
         }
     }
