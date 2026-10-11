@@ -53,6 +53,13 @@ public class OverlayService extends Service {
     private static final String KEY_X = "x";
     private static final String KEY_Y = "y";
     static final String KEY_ORI = "dock_ori";
+    private static final String ECARX_DISPLAY_AREA_STATE = "com.ecarx.displayarea.STATE";
+    private static final String ECARX_DISPLAY_AREA_UPDATE =
+            "com.ecarx.displayarea.core.STATE_COMPONENT_UPDATE";
+    private static final String ECARX_DISPLAY_AREA_EXTRA_STATE =
+            "com.ecarx.displayarea.core.CURRENT_STATE";
+    static final String ACTION_SHORTCUT_ADDED =
+            "com.oemtools.poldock.action.SHORTCUT_ADDED";
     private static final int TILE_DP = 52;
     // 런처 즐겨찾기 카드(타일) 크기: fav_card_width/height (OEM dimens)
     private static final int GRID_TILE_W_DP = 532;
@@ -73,6 +80,7 @@ public class OverlayService extends Service {
     private GradientDrawable barBg;
     private LinearLayout shortcutRow;
     private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
+    private TextView speedLabel, effLabel;
     private ImageView weatherIconView, musicArt, carSweep, speedNeedle, speedGauge;
     private TextView musicPh;
     private String prevGear;
@@ -115,8 +123,14 @@ public class OverlayService extends Service {
     private HandlerThread vehThread;
     private Handler vehHandler;
     private android.view.GestureDetector handleGesture;
-    private java.util.Set<String> homePackages;
-    private String lastFgPkg;
+    private String displayAreaState;
+    private android.database.ContentObserver displayAreaObserver;
+    private android.content.BroadcastReceiver displayAreaReceiver;
+    private android.content.BroadcastReceiver shortcutAddedReceiver;
+    private FrameLayout dockScroll;
+    private int pendingDockScroll = -1;
+    private boolean pendingDockScrollVertical;
+    private String pendingDockScrollMode;
     private String mode = "default";   // 현재 배치 모드: default / home
     private boolean homeFgNow;
 
@@ -145,6 +159,14 @@ public class OverlayService extends Service {
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
+                if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
+                    updateSpeedUnitUi();
+                    return;
+                }
+                if (ShortcutStore.KEY_EFF_WHKM.equals(key)) {
+                    updateEffUnitUi();
+                    return;
+                }
                 if (ShortcutStore.KEY.equals(key)) {
                     if (gridActive) installDock(); else rebuildShortcuts();
                 } else installDock();
@@ -184,13 +206,6 @@ public class OverlayService extends Service {
             ui.postDelayed(this, 450);
         }
     };
-    private final Runnable fgTick = new Runnable() {
-        public void run() {
-            updateHomeMode();
-            ui.postDelayed(this, 1200);
-        }
-    };
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -220,6 +235,8 @@ public class OverlayService extends Service {
         lp.windowAnimations = 0;   // 창 전환 애니메이션 끔 (확인용)
         lp.x = sp.getInt(KEY_X, d(24));
         lp.y = sp.getInt(KEY_Y, d(60));
+        startDisplayAreaTracking();
+        startShortcutAddedTracking();
         installDock();
         sp.registerOnSharedPreferenceChangeListener(prefListener);
     }
@@ -250,8 +267,8 @@ public class OverlayService extends Service {
         ui.removeCallbacks(hazardTick);
         stopVehicle();
         stopMediaCallbacks();
-        ui.removeCallbacks(fgTick);
         vehValues.clear();
+        captureDockScroll();
         mode = activeMode();
         lp.x = sp.getInt(mk(KEY_X), d(24));
         lp.y = sp.getInt(mk(KEY_Y), d(60));
@@ -339,6 +356,8 @@ public class OverlayService extends Service {
         lampDots = null;
         speedNeedle = null;
         speedGauge = null;
+        speedLabel = null;
+        effLabel = null;
         batteryBar = null;
         hasVehWidget = false;
         for (String id : ShortcutStore.widgetOrder(this)) {
@@ -356,16 +375,9 @@ public class OverlayService extends Service {
             ui.post(musicTick);
             startMediaCallbacks();   // 즉시 갱신용 콜백 등록
         }
-        ui.removeCallbacks(fgTick);
         if (dock != null) {
             dock.setVisibility(View.VISIBLE);
             dock.setAlpha(dockAlpha());
-        }
-        // 홈 프로필 사용 + 자동(편집 아님) + 사용정보 접근 시 포그라운드 따라 모드 전환
-        if (sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)
-                && "auto".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto"))
-                && (notifAccessOn() || hasUsageAccess() || FgAccessibilityService.running)) {
-            ui.post(fgTick);
         }
 
         DisplayMetrics dm = realMetrics();
@@ -506,6 +518,7 @@ public class OverlayService extends Service {
 
             FrameLayout scroll = vertical ? new ScrollView(this) : new HorizontalScrollView(this);
             scroll.addView(content);
+            dockScroll = scroll;
             if (vertical) {
                 ((ScrollView) scroll).setVerticalScrollBarEnabled(false);
                 bar.addView(scroll);
@@ -515,6 +528,7 @@ public class OverlayService extends Service {
                 bar.addView(scroll);
                 capWidth(scroll, dm.widthPixels - insetLeftRight() - d(70));
             }
+            restoreDockScroll(scroll, vertical);
             rebuildShortcuts();
         }
         if (barBg != null) {
@@ -554,6 +568,47 @@ public class OverlayService extends Service {
         });
 
         if (hasVehWidget) startVehicle();
+    }
+
+    /** 재구성되는 가로/세로 독의 스크롤 위치를 현재 모드 기준으로 보관한다. */
+    private void captureDockScroll() {
+        pendingDockScroll = -1;
+        pendingDockScrollMode = null;
+        if (dockScroll instanceof ScrollView) {
+            pendingDockScroll = ((ScrollView) dockScroll).getScrollY();
+            pendingDockScrollVertical = true;
+            pendingDockScrollMode = mode;
+        } else if (dockScroll instanceof HorizontalScrollView) {
+            pendingDockScroll = ((HorizontalScrollView) dockScroll).getScrollX();
+            pendingDockScrollVertical = false;
+            pendingDockScrollMode = mode;
+        }
+        dockScroll = null;
+    }
+
+    /** 같은 홈/일반 모드와 같은 방향으로 다시 만들 때만 보던 지점으로 되돌린다. */
+    private void restoreDockScroll(final FrameLayout scroll, boolean vertical) {
+        if (pendingDockScroll < 0 || pendingDockScrollVertical != vertical
+                || !mode.equals(pendingDockScrollMode)) return;
+        final int position = pendingDockScroll;
+        pendingDockScroll = -1;
+        pendingDockScrollMode = null;
+        scroll.getViewTreeObserver().addOnPreDrawListener(
+                new android.view.ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        scroll.getViewTreeObserver().removeOnPreDrawListener(this);
+                        applyDockScroll(scroll, vertical, position);
+                        scroll.post(() -> applyDockScroll(scroll, vertical, position));
+                        return true;
+                    }
+                });
+    }
+
+    private void applyDockScroll(FrameLayout scroll, boolean vertical, int position) {
+        if (scroll != dockScroll) return;
+        if (vertical) ((ScrollView) scroll).scrollTo(0, position);
+        else ((HorizontalScrollView) scroll).scrollTo(position, 0);
     }
 
     // ---------------------------------------------------------------- 타일 공통
@@ -715,7 +770,9 @@ public class OverlayService extends Service {
         box.addView(dustLabel);
         box.addView(dustView);
         box.setClickable(true);
-        box.setOnClickListener(v -> toggleDust());
+        box.setOnClickListener(v -> {
+            toggleDust();
+        });
         renderDustCurrent();
         return box;
     }
@@ -1086,13 +1143,7 @@ public class OverlayService extends Service {
         if (gear || speed) box.setBackground(null);   // 배경은 FrameLayout에서 처리
         TextView lab = tileText(side * 0.20f, wLabel(), false);   // 라벨 (위)
         if (speed || eff) {
-            // 단위는 작은 글씨로 같은 줄에, 한 줄 고정 + 자동 축소 (2줄 방지)
-            String nm = speed ? "속도" : "전비";
-            String un = speed ? speedUnit() : effUnit();
-            android.text.SpannableString ss = new android.text.SpannableString(nm + un);
-            ss.setSpan(new android.text.style.RelativeSizeSpan(0.62f), nm.length(), ss.length(),
-                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-            lab.setText(ss);
+            lab.setText(vehicleUnitLabel(speed));
             lab.setMaxLines(1);
             if (Build.VERSION.SDK_INT >= 26) {
                 int max = Math.round(side * 0.20f), min = Math.round(side * 0.10f);
@@ -1118,6 +1169,8 @@ public class OverlayService extends Service {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         box.addView(val);
         vehValues.put(key, val);
+        if (speed) speedLabel = lab;
+        if (eff) effLabel = lab;
 
         if (speed) return buildSpeedTile(box, cached);
         if (!gear) return box;
@@ -1546,83 +1599,113 @@ public class OverlayService extends Service {
         editPanel.show();
     }
 
-    // ---------------------------------------------------------------- 홈(런처)에서만 표시
+    private void openAppAtBottom() {
+        if (editPanel == null) editPanel = new EditPanel(this);
+        editPanel.showAtBottom();
+    }
 
-    private java.util.Set<String> homePackages() {
-        if (homePackages != null) return homePackages;
-        java.util.Set<String> s = new java.util.HashSet<>();
-        s.add("com.ecarx.car.launcher");
-        s.add("com.android.car.carlauncher");
+    // ---------------------------------------------------------------- 홈(런처) 상태
+
+    /** ECARX SystemUI가 기록하는 현재 디스플레이 영역 상태를 읽는다. */
+    private String readDisplayAreaState() {
         try {
-            Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
-            for (android.content.pm.ResolveInfo ri :
-                    getPackageManager().queryIntentActivities(home, 0)) {
-                if (ri.activityInfo != null) s.add(ri.activityInfo.packageName);
-            }
+            return android.provider.Settings.Global.getString(
+                    getContentResolver(), ECARX_DISPLAY_AREA_STATE);
         } catch (Throwable ignored) {
-        }
-        homePackages = s;
-        return s;
-    }
-
-    boolean hasUsageAccess() {
-        try {
-            android.app.AppOpsManager ao =
-                    (android.app.AppOpsManager) getSystemService(APP_OPS_SERVICE);
-            int mode = ao.checkOpNoThrow("android:get_usage_stats",
-                    android.os.Process.myUid(), getPackageName());
-            return mode == android.app.AppOpsManager.MODE_ALLOWED;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    private String foregroundPackage() {
-        // 접근성 서비스가 켜져 있으면 그 값 우선 (사용정보 접근 불필요)
-        if (FgAccessibilityService.running && FgAccessibilityService.lastPackage != null)
-            return FgAccessibilityService.lastPackage;
-        try {
-            android.app.usage.UsageStatsManager usm =
-                    (android.app.usage.UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
-            long now = System.currentTimeMillis();
-            android.app.usage.UsageEvents ev = usm.queryEvents(now - 10000, now);
-            android.app.usage.UsageEvents.Event e = new android.app.usage.UsageEvents.Event();
-            String top = null;
-            while (ev.hasNextEvent()) {
-                ev.getNextEvent(e);
-                int t = e.getEventType();
-                if (t == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND
-                        || t == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
-                    top = e.getPackageName();
-                }
-            }
-            return top;
-        } catch (Throwable t) {
             return null;
         }
     }
 
-    /** 내비(TMAP 등)가 떠 있는지 — 활성 알림 패키지로 판단 */
-    private boolean drivingAppActive() {
-        for (String p : NotifListener.activePackages()) {
-            if (p == null) continue;
-            String lp = p.toLowerCase(java.util.Locale.US);
-            if (lp.contains("tmap")                       // T맵 계열
-                    || "com.skt.skaf.l001mtm091".equals(p)   // 구형 T map
-                    || lp.contains("navi")) return true;
+    private boolean isDisplayAreaHome(String state) {
+        return "Home".equals(state)
+                || "HOME_RATIO_3".equals(state)
+                || "MapFull".equals(state);
+    }
+
+    private void refreshDisplayAreaState() {
+        displayAreaState = readDisplayAreaState();
+        updateHomeMode();
+    }
+
+    /** Settings 변경과 SystemUI 브로드캐스트를 함께 감시해 상태 전환을 즉시 반영한다. */
+    private void startDisplayAreaTracking() {
+        // 첫 설치 전에 현재 상태를 반영한다. 이 시점에는 아직 독 뷰가 없으므로 재구성하지 않는다.
+        displayAreaState = readDisplayAreaState();
+
+        displayAreaObserver = new android.database.ContentObserver(ui) {
+            @Override
+            public void onChange(boolean selfChange) {
+                refreshDisplayAreaState();
+            }
+        };
+        try {
+            getContentResolver().registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(ECARX_DISPLAY_AREA_STATE),
+                    false, displayAreaObserver);
+        } catch (Throwable ignored) {
         }
-        return false;
+
+        displayAreaReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || !ECARX_DISPLAY_AREA_UPDATE.equals(intent.getAction())) return;
+                String state = intent.getStringExtra(ECARX_DISPLAY_AREA_EXTRA_STATE);
+                displayAreaState = state != null ? state : readDisplayAreaState();
+                updateHomeMode();
+            }
+        };
+        try {
+            registerReceiver(displayAreaReceiver,
+                    new android.content.IntentFilter(ECARX_DISPLAY_AREA_UPDATE));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void stopDisplayAreaTracking() {
+        if (displayAreaObserver != null) {
+            try {
+                getContentResolver().unregisterContentObserver(displayAreaObserver);
+            } catch (Throwable ignored) {
+            }
+            displayAreaObserver = null;
+        }
+        if (displayAreaReceiver != null) {
+            try {
+                unregisterReceiver(displayAreaReceiver);
+            } catch (Throwable ignored) {
+            }
+            displayAreaReceiver = null;
+        }
+    }
+
+    /** 앱 선택 화면을 닫은 뒤에만 인-독 편집 패널을 다시 연다. */
+    private void startShortcutAddedTracking() {
+        shortcutAddedReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || !ACTION_SHORTCUT_ADDED.equals(intent.getAction())) return;
+                ui.postDelayed(() -> {
+                    if (isRunning) openAppAtBottom();
+                }, 180);
+            }
+        };
+        try {
+            registerReceiver(shortcutAddedReceiver, new android.content.IntentFilter(ACTION_SHORTCUT_ADDED));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void stopShortcutAddedTracking() {
+        if (shortcutAddedReceiver == null) return;
+        try {
+            unregisterReceiver(shortcutAddedReceiver);
+        } catch (Throwable ignored) {
+        }
+        shortcutAddedReceiver = null;
     }
 
     private void updateHomeMode() {
-        if (notifAccessOn()) {
-            // 알림 접근으로 TMAP(내비) 실행 감지: 떠 있으면 '다른앱'(default), 아니면 '홈'
-            homeFgNow = !drivingAppActive();
-        } else {
-            String top = foregroundPackage();
-            if (top != null) lastFgPkg = top;
-            homeFgNow = lastFgPkg != null && homePackages().contains(lastFgPkg);
-        }
+        homeFgNow = isDisplayAreaHome(displayAreaState);
         String want = activeMode();
         if (!want.equals(mode)) {
             // 그리드 상태에서 홈을 벗어나면: 세로형 + 우측 센터로 전환
@@ -1857,6 +1940,23 @@ public class OverlayService extends Service {
         return speedMph() ? "mph" : "km/h";
     }
 
+    private CharSequence vehicleUnitLabel(boolean speed) {
+        String name = speed ? "속도" : "전비";
+        String unit = speed ? speedUnit() : effUnit();
+        android.text.SpannableString text = new android.text.SpannableString(name + unit);
+        text.setSpan(new android.text.style.RelativeSizeSpan(0.62f), name.length(), text.length(),
+                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return text;
+    }
+
+    /** 속도 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
+    private void updateSpeedUnitUi() {
+        if (speedLabel != null) speedLabel.setText(vehicleUnitLabel(true));
+        TextView value = vehValues.get(ShortcutStore.KEY_V_SPEED);
+        CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_SPEED);
+        if (value != null && raw != null) value.setText(speedNum(parseIntSafe(raw)));
+    }
+
     /** km/h 정수를 현재 단위 문자열로 변환 */
     private String speedNum(int kmh) {
         if (kmh < 0) return "—";
@@ -1874,6 +1974,14 @@ public class OverlayService extends Service {
 
     private String effUnit() {
         return effWhkm() ? "kWh/100km" : "km/kWh";
+    }
+
+    /** 전비 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
+    private void updateEffUnitUi() {
+        if (effLabel != null) effLabel.setText(vehicleUnitLabel(false));
+        TextView value = vehValues.get(ShortcutStore.KEY_V_EFF);
+        CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_EFF);
+        if (value != null && raw != null) value.setText(effNum(parseFloatSafe(raw)));
     }
 
     /** km/kWh 실수를 현재 단위 문자열로 */
@@ -1944,7 +2052,8 @@ public class OverlayService extends Service {
         ui.removeCallbacks(hazardTick);
         stopVehicle();
         stopMediaCallbacks();
-        ui.removeCallbacks(fgTick);
+        stopDisplayAreaTracking();
+        stopShortcutAddedTracking();
         if (sp != null) sp.unregisterOnSharedPreferenceChangeListener(prefListener);
         if (editPanel != null) editPanel.hide();
         if (wm != null && dock != null) {
@@ -1963,5 +2072,18 @@ public class OverlayService extends Service {
     static boolean canOverlay(Context ctx) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
         return android.provider.Settings.canDrawOverlays(ctx);
+    }
+
+    /** 중지된 독도 차량 런처에서 다시 누르면 확실히 되살린다. */
+    static void start(Context ctx) {
+        Intent intent = new Intent(ctx, OverlayService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(intent);
+            } else {
+                ctx.startService(intent);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 }

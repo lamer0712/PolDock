@@ -17,9 +17,6 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
         if (!OverlayService.canOverlay(ctx)) return;   // 항상 자동 실행 (설정 없음)
-        try {
-            ctx.startService(new Intent(ctx, OverlayService.class));
-        } catch (Throwable ignored) {
-        }
+        OverlayService.start(ctx);
     }
 }

@@ -28,7 +28,7 @@ public class LaunchActivity extends Activity {
 
         // 독 띄우기 (오버레이 권한 없으면 설정 화면으로)
         if (OverlayService.canOverlay(this)) {
-            startService(new Intent(this, OverlayService.class));
+            OverlayService.start(this);
             Toast.makeText(this, "독을 띄웠습니다 · 손잡이(≡) 더블탭으로 설정",
                     Toast.LENGTH_SHORT).show();
         } else {

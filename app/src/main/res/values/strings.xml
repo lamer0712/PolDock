@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">PolDock</string>
-    <string name="a11y_desc">홈 화면과 다른 앱을 구분해 독 배치를 자동 전환하기 위해 현재 앱만 감지합니다. 화면 내용은 읽지 않습니다.</string>
 </resources>

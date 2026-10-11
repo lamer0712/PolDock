@@ -22,6 +22,8 @@ import java.util.List;
 /** 설치된 런처 앱을 아이콘과 함께 보여주고, 고른 앱을 도크 바로가기로 추가. */
 public class AppPickerActivity extends Activity {
 
+    static final String EXTRA_RETURN_TO_DOCK_EDITOR = "return_to_dock_editor";
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -100,6 +102,11 @@ public class AppPickerActivity extends Activity {
         list.add(s);
         ShortcutStore.save(this, list);
         Toast.makeText(this, name + " 추가됨", Toast.LENGTH_SHORT).show();
+        if (getIntent().getBooleanExtra(EXTRA_RETURN_TO_DOCK_EDITOR, false)) {
+            Intent done = new Intent(OverlayService.ACTION_SHORTCUT_ADDED)
+                    .setPackage(getPackageName());
+            sendBroadcast(done);
+        }
         finish();
     }
 }

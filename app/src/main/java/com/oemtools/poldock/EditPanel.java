@@ -23,7 +23,7 @@ import android.widget.TextView;
 import java.util.List;
 
 /**
- * 독 위에서 바로 편집하는 바텀시트 패널 (별도 설정 Activity 없이 오버레이로 동작).
+ * 독 위에서 바로 편집하는 좌측 패널 (별도 설정 Activity 없이 오버레이로 동작).
  * 설정은 OverlayService 와 같은 SharedPreferences 를 쓰며, 변경 즉시 뒤의 독이 갱신된다.
  */
 public class EditPanel {
@@ -33,8 +33,10 @@ public class EditPanel {
     private final SharedPreferences sp;
 
     private View root;          // 전체 스크림 + 시트
+    private ScrollView sheet;
     private LinearLayout body;  // 다시 채우는 내용 컨테이너
     private boolean showing;
+    private boolean scrollToBottomOnShow;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener lis =
             (p, k) -> {
@@ -73,11 +75,11 @@ public class EditPanel {
             return false;
         });
 
-        ScrollView sheet = new ScrollView(c);
+        sheet = new ScrollView(c);
         GradientDrawable sheetBg = new GradientDrawable();
         sheetBg.setColor(Ui.BG);
         int rad = Ui.dp(c, 26);
-        sheetBg.setCornerRadii(new float[]{rad, rad, rad, rad, 0, 0, 0, 0});
+        sheetBg.setCornerRadii(new float[]{0, 0, rad, rad, rad, rad, 0, 0});
         sheet.setBackground(sheetBg);
         sheet.setClickable(true);                 // 시트 탭은 닫히지 않게 소비
         sheet.setVerticalScrollBarEnabled(false);
@@ -88,10 +90,9 @@ public class EditPanel {
         body.setPadding(pad, Ui.dp(c, 12), pad, Ui.dp(c, 24));
         sheet.addView(body);
 
-        int screenH = c.getResources().getDisplayMetrics().heightPixels;
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                Math.round(screenH * 0.42f), Gravity.BOTTOM);
+                ViewGroup.LayoutParams.MATCH_PARENT);
         scrim.addView(sheet, slp);
 
         root = scrim;
@@ -103,13 +104,18 @@ public class EditPanel {
         int type = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
+        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(dm);
+        int topInset = topSystemBarInset(c);
         WindowManager.LayoutParams wlp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
+                Math.max(1, dm.widthPixels / 2),
+                Math.max(1, dm.heightPixels - topInset),
                 type,
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
+        wlp.gravity = Gravity.LEFT | Gravity.TOP;
+        wlp.y = topInset;
         wlp.dimAmount = 0.55f;
         wlp.windowAnimations = android.R.style.Animation_InputMethod;
         try {
@@ -117,8 +123,43 @@ public class EditPanel {
             showing = true;
             root.requestFocus();
             sp.registerOnSharedPreferenceChangeListener(lis);
+            if (scrollToBottomOnShow) {
+                scrollToBottomOnShow = false;
+                scrollToBottom();
+            }
         } catch (Exception ignored) {
         }
+    }
+
+    /** 앱 선택 완료 뒤에는 새로 추가된 바로가기 쪽으로 복귀한다. */
+    void showAtBottom() {
+        if (showing) {
+            scrollToBottom();
+            return;
+        }
+        scrollToBottomOnShow = true;
+        show();
+    }
+
+    private void scrollToBottom() {
+        final ScrollView target = sheet;
+        if (target == null) return;
+        target.post(() -> {
+            if (target == sheet) target.fullScroll(View.FOCUS_DOWN);
+        });
+    }
+
+    private int topSystemBarInset(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets in = wm.getCurrentWindowMetrics().getWindowInsets()
+                        .getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars());
+                return in.top;
+            }
+        } catch (Throwable ignored) {
+        }
+        int id = c.getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? c.getResources().getDimensionPixelSize(id) : 0;
     }
 
     void hide() {
@@ -133,6 +174,7 @@ public class EditPanel {
         } catch (Exception ignored) {
         }
         root = null;
+        sheet = null;
         body = null;
         // 홈 전용 배치 중이면 편집 모드를 자동(포그라운드 전환)으로 복귀
         if (sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)) {
@@ -373,7 +415,8 @@ public class EditPanel {
         card.addView(Ui.rowGap(c,
                 Ui.button(c, "+ 추가", Ui.ACCENT, v -> openEdit(-1)),
                 Ui.button(c, "앱 추가", Ui.GREY,
-                        v -> launchAndClose(new Intent(c, AppPickerActivity.class)))));
+                        v -> launchAndClose(new Intent(c, AppPickerActivity.class)
+                                .putExtra(AppPickerActivity.EXTRA_RETURN_TO_DOCK_EDITOR, true)))));
 
         final List<Shortcut> list = ShortcutStore.load(c);
         if (list.isEmpty()) {
@@ -455,59 +498,30 @@ public class EditPanel {
 
         // 일반/홈 편집을 토글 하나로 합침
         card.addView(Ui.button(c,
-                home ? "🏠 홈 화면일 때 (탭하면 전환)" : "📱 다른 앱일 때 (탭하면 전환)",
+                home ? "🏠 독이 홈 화면 위에 있을 때 (탭하면 전환)"
+                        : "📱 독이 다른 앱 위에 있을 때 (탭하면 전환)",
                 home ? Ui.GREEN : Ui.ACCENT,
                 v -> setEditMode(home ? "default" : "home")));
 
         // 고등학생도 이해할 쉬운 설명
         TextView n = new TextView(c);
-        n.setText("독은 화면에 따라 두 가지 모습으로 바뀌어요.\n\n"
-                + "• 📱 다른 앱일 때 — 지도·음악 같은 앱이 떠 있을 때의 독 모습\n"
-                + "• 🏠 홈 화면일 때 — 차 홈(앱 목록) 화면일 때의 독 모습\n\n"
-                + "지금은 " + (home ? "‘🏠 홈 화면일 때’" : "‘📱 다른 앱일 때’")
-                + " 모습을 편집하는 중이에요. 위젯·배치·위치를 바꾸면 그 화면에서의 모습으로 저장돼요. "
-                + "버튼을 누르면 다른 쪽 모습으로 바꿔서 편집할 수 있어요.");
+        n.setText("독은 놓인 화면에 따라 두 가지 모습으로 바뀌어요.\n\n"
+                + "• 📱 독이 다른 앱 위에 있을 때 — 지도·음악 같은 앱 위의 독 모습\n"
+                + "• 🏠 독이 홈 화면 위에 있을 때 — 차 홈(앱 목록) 위의 독 모습\n\n"
+                + "지금은 " + (home ? "‘🏠 독이 홈 화면 위에 있을 때’"
+                        : "‘📱 독이 다른 앱 위에 있을 때’")
+                + " 모습을 편집하는 중이에요.");
         n.setTextColor(Ui.DIM);
         n.setTextSize(13);
         n.setLineSpacing(Ui.dp(c, 3), 1f);
         n.setPadding(Ui.dp(c, 2), Ui.dp(c, 10), Ui.dp(c, 2), 0);
         card.addView(n);
 
-        // 홈 자동 감지는 접근성 서비스로 — 꺼져 있을 때만 안내 버튼 표시
-        if (!detectionOn()) {
-            card.addView(Ui.button(c, "🔎 홈 화면 자동 감지 켜기", Ui.GREY,
-                    v -> launchAndClose(new Intent(
-                            android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))));
-            card.addView(Ui.fieldLabel(c,
-                    "접근성 설정에서 'PolDock'을 켜면 홈 화면과 다른 앱을 구분해 독이 자동으로 바뀌어요. "
-                            + "현재 떠 있는 앱만 확인하고 화면 내용은 읽지 않아요."));
-        }
         return card;
     }
 
     private void setEditMode(String m) {
         sp.edit().putString(ShortcutStore.KEY_EDIT_MODE, m).apply();
-    }
-
-    /** 홈 감지 가능 상태 (접근성 서비스 켜짐 또는 사용정보 접근 허용) */
-    private boolean detectionOn() {
-        if (FgAccessibilityService.running) return true;
-        try {
-            String flat = android.provider.Settings.Secure.getString(
-                    svc.getContentResolver(),
-                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            if (flat != null && flat.contains(svc.getPackageName() + "/")) return true;
-        } catch (Throwable ignored) {
-        }
-        try {
-            android.app.AppOpsManager ao =
-                    (android.app.AppOpsManager) svc.getSystemService(Context.APP_OPS_SERVICE);
-            int mode = ao.checkOpNoThrow("android:get_usage_stats",
-                    android.os.Process.myUid(), svc.getPackageName());
-            return mode == android.app.AppOpsManager.MODE_ALLOWED;
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     private void stepGrid(String key, int delta) {
