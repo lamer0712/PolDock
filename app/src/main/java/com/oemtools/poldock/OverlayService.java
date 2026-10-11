@@ -164,9 +164,15 @@ public class OverlayService extends Service {
     private final Runnable musicTick = new Runnable() {
         public void run() {
             updateMusic();
-            ui.postDelayed(this, 1200);
+            ui.postDelayed(this, 4000);   // 콜백 백업용 느린 폴링
         }
     };
+
+    // 미디어 세션 콜백 (메타데이터 변경 시 즉시 앨범아트 갱신)
+    private android.media.session.MediaSessionManager mediaMgr;
+    private android.media.session.MediaController mediaMc;
+    private android.media.session.MediaController.Callback mediaCb;
+    private android.media.session.MediaSessionManager.OnActiveSessionsChangedListener mediaSessions;
     private final Runnable hazardTick = new Runnable() {
         public void run() {
             if (lampDots == null || !"P".equals(prevGear)) return;
@@ -240,6 +246,7 @@ public class OverlayService extends Service {
         ui.removeCallbacks(musicTick);
         ui.removeCallbacks(hazardTick);
         stopVehicle();
+        stopMediaCallbacks();
         ui.removeCallbacks(fgTick);
         vehValues.clear();
         mode = activeMode();
@@ -342,7 +349,10 @@ public class OverlayService extends Service {
             ui.post(clockTick);
         }
         if (weatherIconView != null || dustView != null) ui.post(envTick);
-        if (musicArt != null) ui.post(musicTick);
+        if (musicArt != null) {
+            ui.post(musicTick);
+            startMediaCallbacks();   // 즉시 갱신용 콜백 등록
+        }
         ui.removeCallbacks(fgTick);
         if (dock != null) {
             dock.setVisibility(View.VISIBLE);
@@ -764,12 +774,72 @@ public class OverlayService extends Service {
                 if (target == null) target = mc;
             }
             if (target != null) target.getTransportControls().skipToNext();
-            // 곡 바뀐 직후 앨범아트를 빠르게 따라잡기
-            ui.postDelayed(this::updateMusic, 150);
-            ui.postDelayed(this::updateMusic, 500);
-            ui.postDelayed(this::updateMusic, 1000);
+            // 앨범아트 갱신은 MediaController.Callback(onMetadataChanged)이 담당
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 활성 미디어 세션에 콜백을 붙여 메타데이터 변경 시 즉시 갱신 */
+    private void startMediaCallbacks() {
+        if (!notifAccessOn()) return;
+        try {
+            mediaMgr = (android.media.session.MediaSessionManager)
+                    getSystemService(MEDIA_SESSION_SERVICE);
+            final android.content.ComponentName cn =
+                    new android.content.ComponentName(this, NotifListener.class);
+            mediaSessions = controllers -> attachMediaController(pickController(controllers));
+            mediaMgr.addOnActiveSessionsChangedListener(mediaSessions, cn);
+            attachMediaController(pickController(mediaMgr.getActiveSessions(cn)));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private android.media.session.MediaController pickController(
+            java.util.List<android.media.session.MediaController> list) {
+        if (list == null) return null;
+        android.media.session.MediaController any = null;
+        for (android.media.session.MediaController mc : list) {
+            android.media.session.PlaybackState ps = mc.getPlaybackState();
+            if (ps != null && ps.getState() == android.media.session.PlaybackState.STATE_PLAYING)
+                return mc;
+            if (any == null) any = mc;
+        }
+        return any;
+    }
+
+    private void attachMediaController(android.media.session.MediaController mc) {
+        if (mc == mediaMc) {
+            updateMusic();
+            return;
+        }
+        if (mediaMc != null && mediaCb != null) {
+            try { mediaMc.unregisterCallback(mediaCb); } catch (Throwable ignored) {}
+        }
+        mediaMc = mc;
+        if (mc == null) {
+            updateMusic();
+            return;
+        }
+        mediaCb = new android.media.session.MediaController.Callback() {
+            @Override public void onMetadataChanged(android.media.MediaMetadata m) { updateMusic(); }
+            @Override public void onPlaybackStateChanged(android.media.session.PlaybackState s) { updateMusic(); }
+            @Override public void onSessionDestroyed() { attachMediaController(null); }
+        };
+        try { mc.registerCallback(mediaCb, ui); } catch (Throwable ignored) {}
+        updateMusic();
+    }
+
+    private void stopMediaCallbacks() {
+        try {
+            if (mediaMgr != null && mediaSessions != null)
+                mediaMgr.removeOnActiveSessionsChangedListener(mediaSessions);
+        } catch (Throwable ignored) {}
+        if (mediaMc != null && mediaCb != null) {
+            try { mediaMc.unregisterCallback(mediaCb); } catch (Throwable ignored) {}
+        }
+        mediaSessions = null;
+        mediaMc = null;
+        mediaCb = null;
     }
 
     private void updateMusic() {
@@ -1802,6 +1872,7 @@ public class OverlayService extends Service {
         ui.removeCallbacks(musicTick);
         ui.removeCallbacks(hazardTick);
         stopVehicle();
+        stopMediaCallbacks();
         ui.removeCallbacks(fgTick);
         if (sp != null) sp.unregisterOnSharedPreferenceChangeListener(prefListener);
         if (editPanel != null) editPanel.hide();
