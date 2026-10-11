@@ -144,13 +144,16 @@ public class OverlayService extends Service {
                     return;
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
+                if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
                 if (ShortcutStore.KEY.equals(key)) {
                     if (gridActive) installDock(); else rebuildShortcuts();
                 } else installDock();
             };
 
+    private boolean colonOn = true;   // 시계 콜론 깜빡임 상태
     private final Runnable clockTick = new Runnable() {
         public void run() {
+            colonOn = !colonOn;        // 1초마다 콜론 토글 → 2초 주기 깜빡임
             updateClock();
             ui.postDelayed(this, 1000);
         }
@@ -601,12 +604,54 @@ public class OverlayService extends Service {
 
     private View buildTimeTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(wBg());
-        timeAmPm = tileText(side * 0.20f, wLabel(), false);   // 오전/오후 (위, 작게)
-        timeView = valueText(side);       // 시각 (아래, 크게)
-        box.addView(timeAmPm);
-        box.addView(timeView);
-        return box;
+        final float radius = side * CalendarTile.CORNER_RATIO;
+
+        FrameLayout tile = new FrameLayout(this);
+        tile.setClipToOutline(true);
+        tile.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(wBg());
+        bg.setCornerRadius(radius);
+        tile.setBackground(bg);
+
+        // 디지털
+        final LinearLayout dig = new LinearLayout(this);
+        dig.setOrientation(LinearLayout.VERTICAL);
+        dig.setGravity(Gravity.CENTER);
+        timeAmPm = tileText(side * 0.20f, wLabel(), false);   // 오전/오후 (위)
+        timeView = valueText(side);                            // 시각 (아래)
+        dig.addView(timeAmPm);
+        dig.addView(timeView);
+        tile.addView(dig, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+
+        // 아날로그
+        final AnalogClockView analog = new AnalogClockView(this);
+        analog.setColors(wFg(), wLabel());
+        int inset = Math.round(side * 0.06f);
+        FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(side, side, Gravity.CENTER);
+        alp.setMargins(inset, inset, inset, inset);
+        tile.addView(analog, alp);
+
+        boolean isAnalog = sp.getBoolean(ShortcutStore.KEY_TIME_ANALOG, false);
+        dig.setVisibility(isAnalog ? View.GONE : View.VISIBLE);
+        analog.setVisibility(isAnalog ? View.VISIBLE : View.GONE);
+
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> {
+            boolean now = !sp.getBoolean(ShortcutStore.KEY_TIME_ANALOG, false);
+            sp.edit().putBoolean(ShortcutStore.KEY_TIME_ANALOG, now).apply();
+            dig.setVisibility(now ? View.GONE : View.VISIBLE);
+            analog.setVisibility(now ? View.VISIBLE : View.GONE);   // 즉시 전환 (재구성 없음)
+        });
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
+        lp.setMargins(d(5), d(3), d(5), d(3));
+        tile.setLayoutParams(lp);
+        return tile;
     }
 
     private void updateClock() {
@@ -621,7 +666,13 @@ public class OverlayService extends Service {
             int m = cal.get(java.util.Calendar.MINUTE);
             int hr = h % 12;
             if (hr == 0) hr = 12;
-            timeView.setText(String.format(Locale.US, "%d:%02d", hr, m));
+            String t = String.format(Locale.US, "%d:%02d", hr, m);
+            int ci = t.indexOf(':');
+            android.text.SpannableString ss = new android.text.SpannableString(t);
+            if (!colonOn && ci >= 0)   // 콜론만 투명 처리 → 폭 유지하며 깜빡임
+                ss.setSpan(new android.text.style.ForegroundColorSpan(0x00000000),
+                        ci, ci + 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            timeView.setText(ss);
             if (timeAmPm != null) {
                 timeAmPm.setVisibility(View.VISIBLE);
                 timeAmPm.setText(h < 12 ? "오전" : "오후");

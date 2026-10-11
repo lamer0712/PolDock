@@ -20,6 +20,7 @@ public class ShortcutStore {
     static final String KEY_DATE_FMT = "date_fmt";
     static final String KEY_TIME_ON = "time_on";
     static final String KEY_TIME_FMT = "time_fmt";
+    static final String KEY_TIME_ANALOG = "time_analog"; // 시계 위젯: 아날로그 표시
     static final String KEY_WEATHER_ON = "weather_on";
     static final String KEY_DUST_ON = "dust_on";
     // 차량 데이터 개별
