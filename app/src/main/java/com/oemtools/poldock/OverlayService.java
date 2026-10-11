@@ -85,7 +85,8 @@ public class OverlayService extends Service {
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
     private EditPanel editPanel;     // 독 위 편집 패널
     private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
-    private static final int SNAP_EDGE_DP = 56;   // 벽 스냅 발동 범위 (손가락 두께 정도)
+    private static final int SNAP_EDGE_DP = 50;   // 벽 스냅 발동 범위 (손가락 두께 정도)
+    private int pivotCx, pivotCy;    // 배치 전환 시 제자리 피벗 기준 중심
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -1392,6 +1393,8 @@ public class OverlayService extends Service {
         int w = dock.getWidth(), h = dock.getHeight();
         int it = insetTop(), ib = insetBottom();
         int cx = lp.x + w / 2, cy = lp.y + h / 2;
+        pivotCx = cx;
+        pivotCy = cy;
 
         String curOri = sp.getString(mk(KEY_ORI), "h");
         String target = curOri;
@@ -1418,9 +1421,11 @@ public class OverlayService extends Service {
         }
 
         if (!target.equals(curOri)) {
-            // 배치가 바뀌면 재구성 후 새 크기 기준으로 붙인다
+            // 배치가 바뀌면 재구성 후 제자리에서 피벗 → 새 크기 기준으로 붙인다.
+            // 현재(드롭) 위치를 함께 저장해 재구성 때 초기 위치로 튀지 않게 함.
             pendingSnapEdge = edge;
-            sp.edit().putString(mk(KEY_ORI), target).apply();   // -> prefListener -> installDock
+            sp.edit().putString(mk(KEY_ORI), target)
+                    .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();   // -> prefListener -> installDock
         } else if (edge != null) {
             applySnapEdge(edge);   // 배치 그대로면 즉시 붙임
         } else {
@@ -1436,10 +1441,12 @@ public class OverlayService extends Service {
         int w = dock.getWidth(), h = dock.getHeight();
         int it = insetTop(), ib = insetBottom();
         switch (edge) {
-            case "top":    lp.y = it + d(2); break;
-            case "bottom": lp.y = sh - ib - h - d(2); break;
-            case "left":   lp.x = d(2); break;
-            case "right":  lp.x = sw - w - d(2); break;
+            // 가로형: 벽(상/하)에 붙이고, 수평은 드롭 지점 중심 유지 → 제자리 피벗
+            case "top":    lp.y = it + d(2);            lp.x = pivotCx - w / 2; break;
+            case "bottom": lp.y = sh - ib - h - d(2);   lp.x = pivotCx - w / 2; break;
+            // 세로형: 벽(좌/우)에 붙이고, 수직은 드롭 지점 중심 유지 → 제자리 피벗
+            case "left":   lp.x = d(2);                 lp.y = pivotCy - h / 2; break;
+            case "right":  lp.x = sw - w - d(2);        lp.y = pivotCy - h / 2; break;
             case "gridTop":    lp.x = sw - w - d(4); lp.y = it + d(4); break;
             case "gridBottom": lp.x = sw - w - d(4); lp.y = sh - ib - h - d(4); break;
         }
