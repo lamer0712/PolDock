@@ -36,12 +36,16 @@ public class ShortcutStore {
     static final String KEY_ALPHA = "dock_alpha"; // 불투명도 퍼센트 20~100
     static final int DEFAULT_ALPHA = 100;
     static final String KEY_AUTOSTART = "autostart"; // 시동(부팅) 시 자동 실행
+    static final String KEY_DARK = "widget_dark";    // 위젯 다크 모드 (바로가기는 제외)
+    static final String KEY_SPEED_MPH = "speed_mph"; // 속도 단위: true=mph, false=km/h
+    static final String KEY_EFF_WHKM = "eff_whkm";   // 전비 단위: true=Wh/km, false=km/kWh
     static final String KEY_WIDGET_ORDER = "widget_order";
     static final String KEY_HOME_PROFILE = "home_profile"; // 홈(런처)에서 별도 배치 사용
     static final String KEY_EDIT_MODE = "edit_mode";       // 설정 편집 대상: auto/default/home
     static final String KEY_GRID_C = "grid_cols";          // 그리드 열
     static final String KEY_GRID_R = "grid_rows";          // 그리드 행
     static final int DEFAULT_GRID = 3;
+    static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top(우상단)/bottom(우하단)
 
     static final String DEFAULT_DATE_FMT = "M월 d일 (E)";
     static final String DEFAULT_TIME_FMT = "a h:mm";

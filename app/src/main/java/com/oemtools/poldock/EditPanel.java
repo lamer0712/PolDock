@@ -91,10 +91,13 @@ public class EditPanel {
         int screenH = c.getResources().getDisplayMetrics().heightPixels;
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                Math.round(screenH * 0.82f), Gravity.BOTTOM);
+                Math.round(screenH * 0.42f), Gravity.BOTTOM);
         scrim.addView(sheet, slp);
 
         root = scrim;
+        // 편집 중엔 구체적 모드로 고정 (auto면 '다른 앱일 때'부터 시작)
+        if ("auto".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto")))
+            sp.edit().putString(ShortcutStore.KEY_EDIT_MODE, "default").apply();
         populate();
 
         int type = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -166,10 +169,10 @@ public class EditPanel {
         hlp.bottomMargin = Ui.dp(c, 10);
         body.addView(header, hlp);
 
+        body.addView(buildHomeCard());
         body.addView(buildLayoutCard());
         body.addView(buildWidgetCard());
         body.addView(buildShortcutCard());
-        body.addView(buildHomeCard());
 
         // 독 끄기
         body.addView(Ui.button(c, "독 끄기", Ui.DANGER, v -> {
@@ -193,13 +196,17 @@ public class EditPanel {
         if ("g".equals(ori)) {
             int cols = sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID);
             int rows = sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
-            card.addView(Ui.fieldLabel(c, "그리드  " + cols + "열 × " + rows + "행"));
+            card.addView(gridStepper(c, "열 (가로 칸)", ShortcutStore.KEY_GRID_C, cols));
+            card.addView(gridStepper(c, "행 (세로 칸)", ShortcutStore.KEY_GRID_R, rows));
+            // 위치: 우상단 / 우하단 (드래그 불가, 여기서 선택)
+            String gpos = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
+            card.addView(Ui.fieldLabel(c, "위치"));
             card.addView(Ui.rowGap(c,
-                    Ui.button(c, "열 −", Ui.GREY, v -> stepGrid(ShortcutStore.KEY_GRID_C, -1)),
-                    Ui.button(c, "열 ＋", Ui.GREY, v -> stepGrid(ShortcutStore.KEY_GRID_C, 1)),
-                    Ui.button(c, "행 −", Ui.GREY, v -> stepGrid(ShortcutStore.KEY_GRID_R, -1)),
-                    Ui.button(c, "행 ＋", Ui.GREY, v -> stepGrid(ShortcutStore.KEY_GRID_R, 1))));
-            TextView n = Ui.fieldLabel(c, "그리드는 런처 타일 크기로 고정됩니다 (크기 조절 없음).");
+                    Ui.button(c, "우상단", "top".equals(gpos) ? Ui.ACCENT : Ui.GREY,
+                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "top").apply()),
+                    Ui.button(c, "우하단", "bottom".equals(gpos) ? Ui.ACCENT : Ui.GREY,
+                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "bottom").apply())));
+            TextView n = Ui.fieldLabel(c, "그리드는 런처 타일 크기로 고정되며, 위치는 드래그 대신 위에서 선택합니다.");
             card.addView(n);
         } else {
             int pct = sp.getInt(scaleKeyE(), ShortcutStore.DEFAULT_SCALE);
@@ -256,6 +263,56 @@ public class EditPanel {
         return card;
     }
 
+    /** 큰 숫자 스테퍼 한 줄: [라벨]  [−]  N  [＋] */
+    private View gridStepper(Context c, String label, String key, int value) {
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(Ui.round(Ui.FIELD, Ui.dp(c, 14)));
+        row.setPadding(Ui.dp(c, 14), Ui.dp(c, 8), Ui.dp(c, 8), Ui.dp(c, 8));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.topMargin = Ui.dp(c, 8);
+        row.setLayoutParams(rlp);
+
+        TextView lab = new TextView(c);
+        lab.setText(label);
+        lab.setTextColor(Ui.TEXT);
+        lab.setTextSize(16);
+        row.addView(lab, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        row.addView(stepBtn(c, "−", v -> stepGrid(key, -1)));
+
+        TextView num = new TextView(c);
+        num.setText(String.valueOf(value));
+        num.setTextColor(Ui.TEXT);
+        num.setTextSize(30);
+        num.setTypeface(num.getTypeface(), android.graphics.Typeface.BOLD);
+        num.setGravity(Gravity.CENTER);
+        row.addView(num, new LinearLayout.LayoutParams(Ui.dp(c, 54),
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        row.addView(stepBtn(c, "＋", v -> stepGrid(key, 1)));
+        return row;
+    }
+
+    private TextView stepBtn(Context c, String t, View.OnClickListener cl) {
+        TextView b = new TextView(c);
+        b.setText(t);
+        b.setTextColor(0xFFFFFFFF);
+        b.setTextSize(24);
+        b.setTypeface(b.getTypeface(), android.graphics.Typeface.BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Ui.pressable(Ui.GREY, 0xFF50535C, Ui.dp(c, 12)));
+        b.setOnClickListener(cl);
+        int sz = Ui.dp(c, 50);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sz, sz);
+        lp.leftMargin = Ui.dp(c, 6);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
     private TextView segBtn(String label, String val, String cur) {
         boolean active = val.equals(cur);
         return Ui.button(svc, label, active ? Ui.ACCENT : Ui.GREY, v -> {
@@ -268,6 +325,10 @@ public class EditPanel {
         Context c = svc;
         LinearLayout card = Ui.card(c);
         card.addView(Ui.sectionLabel(c, "위젯 (탭하여 켜고 끄기 · ↑↓ 순서)"));
+        boolean dark = sp.getBoolean(ShortcutStore.KEY_DARK, false);
+        card.addView(Ui.button(c, dark ? "🌙 위젯 다크 모드  ●" : "☀️ 위젯 라이트 모드  ○",
+                dark ? Ui.GREEN : Ui.GREY,
+                v -> sp.edit().putBoolean(ShortcutStore.KEY_DARK, !dark).apply()));
         final List<String> order = ShortcutStore.widgetOrder(c);
         for (int i = 0; i < order.size(); i++) {
             final String id = order.get(i);
@@ -389,37 +450,54 @@ public class EditPanel {
     private View buildHomeCard() {
         Context c = svc;
         LinearLayout card = Ui.card(c);
-        card.addView(Ui.sectionLabel(c, "홈 화면 연동"));
-        boolean hp = sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false);
-        String em = sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto");
+        card.addView(Ui.sectionLabel(c, "지금 편집하는 화면"));
+        boolean home = "home".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "default"));
 
-        card.addView(Ui.rowGap(c,
-                Ui.button(c, hp ? "홈 전용 배치  ●" : "홈 전용 배치  ○",
-                        hp ? Ui.GREEN : Ui.GREY, v -> toggleHomeProfile()),
-                Ui.button(c, "사용정보 접근", Ui.GREY,
-                        v -> launchAndClose(new Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)))));
+        // 일반/홈 편집을 토글 하나로 합침
+        card.addView(Ui.button(c,
+                home ? "🏠 홈 화면일 때 (탭하면 전환)" : "📱 다른 앱일 때 (탭하면 전환)",
+                home ? Ui.GREEN : Ui.ACCENT,
+                v -> setEditMode(home ? "default" : "home")));
 
-        boolean editHome = hp && "home".equals(em);
-        boolean editDef = hp && "default".equals(em);
-        card.addView(Ui.rowGap(c,
-                Ui.button(c, "일반 편집", editDef ? Ui.ACCENT : Ui.GREY, v -> setEditMode("default")),
-                Ui.button(c, "홈 편집", editHome ? Ui.ACCENT : Ui.GREY, v -> setEditMode("home"))));
-
-        TextView n = Ui.fieldLabel(c, "홈 전용 배치: OEM 런처에선 '홈' 배치, 다른 앱 위에선 '일반' 배치로 자동 전환. "
-                + "각 모드를 [편집] 후 독을 드래그·조절하세요. (사용정보 접근 필요)");
+        // 고등학생도 이해할 쉬운 설명
+        TextView n = new TextView(c);
+        n.setText("독은 화면에 따라 두 가지 모습으로 바뀌어요.\n\n"
+                + "• 📱 다른 앱일 때 — 지도·음악 같은 앱이 떠 있을 때의 독 모습\n"
+                + "• 🏠 홈 화면일 때 — 차 홈(앱 목록) 화면일 때의 독 모습\n\n"
+                + "지금은 " + (home ? "‘🏠 홈 화면일 때’" : "‘📱 다른 앱일 때’")
+                + " 모습을 편집하는 중이에요. 위젯·배치·위치를 바꾸면 그 화면에서의 모습으로 저장돼요. "
+                + "버튼을 누르면 다른 쪽 모습으로 바꿔서 편집할 수 있어요.");
+        n.setTextColor(Ui.DIM);
+        n.setTextSize(13);
+        n.setLineSpacing(Ui.dp(c, 3), 1f);
+        n.setPadding(Ui.dp(c, 2), Ui.dp(c, 10), Ui.dp(c, 2), 0);
         card.addView(n);
+
+        // 홈 화면 자동 감지는 '사용정보 접근'이 필요 — 아직 꺼져 있을 때만 안내 버튼 표시
+        if (!hasUsageAccess()) {
+            card.addView(Ui.button(c, "🔎 홈 화면 자동 감지 켜기 (사용정보 접근)", Ui.GREY,
+                    v -> launchAndClose(new Intent(
+                            android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS))));
+            card.addView(Ui.fieldLabel(c,
+                    "이걸 켜야 홈 화면과 다른 앱을 구분해 독 모습이 자동으로 바뀌어요."));
+        }
         return card;
     }
 
-    private void toggleHomeProfile() {
-        boolean on = !sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false);
-        sp.edit().putBoolean(ShortcutStore.KEY_HOME_PROFILE, on)
-                .putString(ShortcutStore.KEY_EDIT_MODE, on ? "default" : "auto").apply();
+    private void setEditMode(String m) {
+        sp.edit().putString(ShortcutStore.KEY_EDIT_MODE, m).apply();
     }
 
-    private void setEditMode(String m) {
-        if (!sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)) return;
-        sp.edit().putString(ShortcutStore.KEY_EDIT_MODE, m).apply();
+    private boolean hasUsageAccess() {
+        try {
+            android.app.AppOpsManager ao =
+                    (android.app.AppOpsManager) svc.getSystemService(Context.APP_OPS_SERVICE);
+            int mode = ao.checkOpNoThrow("android:get_usage_stats",
+                    android.os.Process.myUid(), svc.getPackageName());
+            return mode == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private void stepGrid(String key, int delta) {

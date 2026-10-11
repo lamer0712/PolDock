@@ -60,10 +60,9 @@ public class OverlayService extends Service {
     // 런처 카드 헤더 아이콘: card_icon_size=64dp, card_icon_margin_*=32dp
     private static final int CARD_ICON_DP = 64;
     private static final int CARD_ICON_MARGIN_DP = 32;
-    // 타일 기본색 = 날짜(캘린더) 타일과 동일: 흰 바탕 + 어두운 내용
-    private static final int TILE_BG = 0xFFFFFFFF;
-    private static final int TILE_FG = 0xFF1C1C1E;
-    private static final int TILE_LABEL = 0xFF4E5157;
+    // 바로가기 등 고정(라이트) 타일색
+    private static final int SHORTCUT_BG = 0xFFFFFFFF;
+    private static final int SHORTCUT_FG = 0xFF1C1C1E;
     private float SCALE = 1.5f;
 
     /** macOS Dock 컨테이너 코너 ≈ 두께의 25% */
@@ -83,6 +82,7 @@ public class OverlayService extends Service {
     private boolean hasVehWidget;
     private boolean gridActive;
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
+    private int gridPage;            // 현재 그리드 페이지 (재구성 시 유지)
     private EditPanel editPanel;     // 독 위 편집 패널
     private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
     private static final int SNAP_EDGE_DP = 50;   // 벽 스냅 발동 범위 (손가락 두께 정도)
@@ -187,6 +187,7 @@ public class OverlayService extends Service {
         super.onCreate();
         isRunning = true;
         sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
+        sp.edit().putBoolean(ShortcutStore.KEY_HOME_PROFILE, true).apply();  // 홈 전용 배치 항상 켜짐
         handleGesture = new android.view.GestureDetector(this,
                 new android.view.GestureDetector.SimpleOnGestureListener() {
                     @Override
@@ -285,6 +286,13 @@ public class OverlayService extends Service {
             float tilePx = cell * 0.82f;                 // 셀 안에 여백을 두고 채움
             SCALE = tilePx / (TILE_DP * density);
             SCALE = Math.max(0.5f, Math.min(4f, SCALE)); // 과대/과소 방지
+            // 그리드: 위치 고정 (드래그 불가) — 우상단/우하단 타일에 벽 딱 붙게
+            DisplayMetrics gdm = realMetrics();
+            lp.x = gdm.widthPixels - lp.width;
+            if ("bottom".equals(sp.getString(ShortcutStore.KEY_GRID_POS, "top")))
+                lp.y = gdm.heightPixels - insetBottom() - lp.height;
+            else
+                lp.y = 0;
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -441,6 +449,26 @@ public class OverlayService extends Service {
             }
             pager.addView(pagesRow, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            // 재구성(위젯 토글 등) 후에도 보던 페이지 유지 — 그리기 직전에 스크롤 잡아 깜빡임 방지
+            final int restorePage = Math.max(0, Math.min(pages - 1, gridPage));
+            gridPage = restorePage;
+            if (restorePage > 0) pager.setScrollX(restorePage * pageW);
+            pager.getViewTreeObserver().addOnPreDrawListener(
+                    new android.view.ViewTreeObserver.OnPreDrawListener() {
+                        public boolean onPreDraw() {
+                            pager.getViewTreeObserver().removeOnPreDrawListener(this);
+                            pager.scrollTo(restorePage * pageW, 0);
+                            if (gridDots != null) {
+                                for (int i = 0; i < gridDots.getChildCount(); i++) {
+                                    View d = gridDots.getChildAt(i);
+                                    if (d.getBackground() instanceof GradientDrawable)
+                                        ((GradientDrawable) d.getBackground())
+                                                .setColor(i == restorePage ? 0xFFFFFFFF : 0x66FFFFFF);
+                                }
+                            }
+                            return true;
+                        }
+                    });
             // 손 떼면 가장 가까운 페이지로 스냅 + 점 갱신
             if (pages > 1) {
                 pager.setOnTouchListener((v, e) -> {
@@ -536,7 +564,7 @@ public class OverlayService extends Service {
 
     /** 값 글씨: 한 줄 + 길면 자동 축소 (50km 등 줄바꿈 방지) */
     private TextView valueText(int side) {
-        TextView t = tileText(side * 0.36f, TILE_FG, true);
+        TextView t = tileText(side * 0.36f, wFg(), true);
         t.setMaxLines(1);
         if (Build.VERSION.SDK_INT >= 26) {
             int max = Math.round(side * 0.36f);
@@ -563,8 +591,8 @@ public class OverlayService extends Service {
 
     private View buildDateTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        dateWeekday = tileText(side * 0.20f, TILE_LABEL, false);   // 요일 (위, 라벨)
+        LinearLayout box = tileBox(wBg());
+        dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
         dateDay = valueText(side);                                 // 날짜 (아래, 값)
         box.addView(dateWeekday);
         box.addView(dateDay);
@@ -573,8 +601,8 @@ public class OverlayService extends Service {
 
     private View buildTimeTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        timeAmPm = tileText(side * 0.20f, TILE_LABEL, false);   // 오전/오후 (위, 작게)
+        LinearLayout box = tileBox(wBg());
+        timeAmPm = tileText(side * 0.20f, wLabel(), false);   // 오전/오후 (위, 작게)
         timeView = valueText(side);       // 시각 (아래, 크게)
         box.addView(timeAmPm);
         box.addView(timeView);
@@ -605,8 +633,8 @@ public class OverlayService extends Service {
 
     private View buildWeatherTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        tempView = tileText(side * 0.24f, TILE_LABEL, false);   // 온도 (°기호 보정으로 살짝 키움)
+        LinearLayout box = tileBox(wBg());
+        tempView = tileText(side * 0.24f, wLabel(), false);   // 온도 (°기호 보정으로 살짝 키움)
         tempView.setText(cacheTemp != null ? cacheTemp : "—");
         box.addView(tempView);
         weatherIconView = new ImageView(this);                  // 그림 (아래)
@@ -618,8 +646,8 @@ public class OverlayService extends Service {
 
     private View buildDustTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        dustLabel = tileText(side * 0.20f, TILE_LABEL, false);   // 라벨 (미세/초미세)
+        LinearLayout box = tileBox(wBg());
+        dustLabel = tileText(side * 0.20f, wLabel(), false);   // 라벨 (미세/초미세)
         dustLabel.setText("미세");
         dustView = valueText(side);   // 값 (아래)
         dustView.setText("…");
@@ -645,7 +673,7 @@ public class OverlayService extends Service {
         if (dustLabel != null) dustLabel.setText(dustShowPm25 ? "초미세" : "미세");
         if (pm < 0) {
             dustView.setText("—");
-            dustView.setTextColor(TILE_FG);
+            dustView.setTextColor(wFg());
             return;
         }
         dustView.setText(String.valueOf(pm));
@@ -667,7 +695,7 @@ public class OverlayService extends Service {
 
     private View buildMusicTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
+        LinearLayout box = tileBox(wBg());
         int isz = Math.round(side * 0.86f);
         final float radius = side * CalendarTile.CORNER_RATIO;
 
@@ -692,15 +720,52 @@ public class OverlayService extends Service {
         fl.addView(musicPh, new FrameLayout.LayoutParams(isz, isz));
 
         box.addView(fl, new LinearLayout.LayoutParams(isz, isz));
+        box.setClickable(true);
         box.setOnClickListener(v -> {
-            // 앨범아트 없으면 알림 접근 설정 열기
-            try {
-                startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            } catch (Exception ignored) {
+            if (notifAccessOn()) {
+                mediaNext();   // 권한 있음 → 다음 곡
+            } else {
+                // 권한 없음 → 알림 접근 설정 열기
+                try {
+                    startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception ignored) {
+                }
             }
         });
         return box;
+    }
+
+    /** 알림 접근(미디어 세션 읽기) 허용 여부 */
+    private boolean notifAccessOn() {
+        try {
+            String flat = android.provider.Settings.Secure.getString(
+                    getContentResolver(), "enabled_notification_listeners");
+            return flat != null && flat.contains(getPackageName());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 현재 재생 중인(없으면 아무) 미디어 세션에 다음 곡 명령 */
+    private void mediaNext() {
+        try {
+            android.media.session.MediaSessionManager msm =
+                    (android.media.session.MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
+            java.util.List<android.media.session.MediaController> cs = msm.getActiveSessions(
+                    new android.content.ComponentName(this, NotifListener.class));
+            android.media.session.MediaController target = null;
+            for (android.media.session.MediaController mc : cs) {
+                android.media.session.PlaybackState ps = mc.getPlaybackState();
+                if (ps != null && ps.getState() == android.media.session.PlaybackState.STATE_PLAYING) {
+                    target = mc;
+                    break;
+                }
+                if (target == null) target = mc;
+            }
+            if (target != null) target.getTransportControls().skipToNext();
+        } catch (Throwable ignored) {
+        }
     }
 
     private void updateMusic() {
@@ -891,15 +956,41 @@ public class OverlayService extends Service {
         hasVehWidget = true;
         boolean gear = ShortcutStore.KEY_V_GEAR.equals(key);
         boolean speed = ShortcutStore.KEY_V_SPEED.equals(key);
-        LinearLayout box = tileBox(TILE_BG);
+        boolean eff = ShortcutStore.KEY_V_EFF.equals(key);
+        LinearLayout box = tileBox(wBg());
         if (gear || speed) box.setBackground(null);   // 배경은 FrameLayout에서 처리
-        TextView lab = tileText(side * 0.20f, TILE_LABEL, false);   // 라벨 (위)
-        lab.setText(label);
+        TextView lab = tileText(side * 0.20f, wLabel(), false);   // 라벨 (위)
+        if (speed || eff) {
+            // 단위는 작은 글씨로 같은 줄에, 한 줄 고정 + 자동 축소 (2줄 방지)
+            String nm = speed ? "속도" : "전비";
+            String un = speed ? speedUnit() : effUnit();
+            android.text.SpannableString ss = new android.text.SpannableString(nm + un);
+            ss.setSpan(new android.text.style.RelativeSizeSpan(0.62f), nm.length(), ss.length(),
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            lab.setText(ss);
+            lab.setMaxLines(1);
+            if (Build.VERSION.SDK_INT >= 26) {
+                int max = Math.round(side * 0.20f), min = Math.round(side * 0.10f);
+                int step = Math.max(1, Math.round(side * 0.01f));
+                lab.setAutoSizeTextTypeUniformWithConfiguration(min, max, step,
+                        TypedValue.COMPLEX_UNIT_PX);
+            }
+        } else {
+            lab.setText(label);
+        }
         TextView val = valueText(side);   // 값 (아래)
         CharSequence cached = cacheVeh.get(key);
-        val.setText(cached != null ? cached : "—");   // 재생성 시 마지막 값 유지
+        if (speed) val.setText(cached != null ? speedNum(parseIntSafe(cached)) : "—");
+        else if (eff) val.setText(cached != null ? effNum(parseFloatSafe(cached)) : "—");
+        else val.setText(cached != null ? cached : "—");   // 재생성 시 마지막 값 유지
         if (gear && cached != null) val.setTextColor(gearColor(cached.toString()));
-        box.addView(lab);
+        if (eff) {
+            box.setClickable(true);
+            box.setOnClickListener(v -> toggleEffUnit());   // 탭 → km/kWh ↔ Wh/km
+        }
+        // 라벨 폭을 타일 폭에 맞춰 자동 축소가 한 줄로 동작하게
+        box.addView(lab, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         box.addView(val);
         vehValues.put(key, val);
 
@@ -915,7 +1006,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
         carSweep = new ImageView(this);
         int carRes = getResources().getIdentifier("polestar", "drawable", getPackageName());
         if (carRes != 0) carSweep.setImageResource(carRes);
@@ -948,7 +1039,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
 
         batteryBar = new BatteryBar(this);            // 배경
         batteryBar.setAlpha(0.42f);
@@ -957,9 +1048,9 @@ public class OverlayService extends Service {
         bbp.gravity = Gravity.CENTER;
         tile.addView(batteryBar, bbp);
 
-        LinearLayout box = tileBox(TILE_BG);
+        LinearLayout box = tileBox(wBg());
         box.setBackground(null);
-        TextView lab = tileText(side * 0.20f, TILE_LABEL, false);
+        TextView lab = tileText(side * 0.20f, wLabel(), false);
         lab.setText(label);
         TextView val = valueText(side);
         CharSequence cached = cacheVeh.get(ShortcutStore.KEY_V_BATTERY);
@@ -1000,7 +1091,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
         speedGauge = new ImageView(this);                 // 원형 눈금 (고정)
         speedGauge.setImageDrawable(new SpeedGauge());
         speedGauge.setVisibility(View.GONE);
@@ -1023,6 +1114,8 @@ public class OverlayService extends Service {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
         lp.setMargins(d(5), d(3), d(5), d(3));
         tile.setLayoutParams(lp);
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> toggleSpeedUnit());   // 탭 → km/h ↔ mph
         return tile;
     }
 
@@ -1062,7 +1155,8 @@ public class OverlayService extends Service {
                             ui.post(() -> {
                                 updateSpeedNeedle(kmh);
                                 TextView tv = vehValues.get(ShortcutStore.KEY_V_SPEED);
-                                if (tv != null) tv.setText(String.valueOf(Math.round(kmh)));
+                                if (tv != null) tv.setText(speedNum(Math.round(kmh)));
+                                cacheVeh.put(ShortcutStore.KEY_V_SPEED, String.valueOf(Math.round(kmh)));
                             });
                         }
                     }
@@ -1097,8 +1191,15 @@ public class OverlayService extends Service {
                             }
                             prevGear = v;
                         } else if (ShortcutStore.KEY_V_SPEED.equals(e.getKey())) {
-                            cs = v;
-                            updateSpeedNeedle(parseIntSafe(v));
+                            int kmh = parseIntSafe(v);
+                            updateSpeedNeedle(kmh);
+                            cacheVeh.put(e.getKey(), v);              // 원본 km/h 캐시 (바늘/재생성용)
+                            e.getValue().setText(speedNum(kmh));      // 단위 변환해 표시
+                            continue;
+                        } else if (ShortcutStore.KEY_V_EFF.equals(e.getKey())) {
+                            cacheVeh.put(e.getKey(), v);              // 원본 km/kWh 캐시
+                            e.getValue().setText(effNum(parseFloatSafe(v)));
+                            continue;
                         } else {
                             cs = v;
                         }
@@ -1160,14 +1261,14 @@ public class OverlayService extends Service {
 
     /** 기어 색상: P 검정 · D 다크그린 · R 다크레드 · N 오렌지 */
     private int gearColor(String g) {
-        if (g == null) return TILE_FG;
+        if (g == null) return wFg();
         switch (g) {
-            case "P": return 0xFF1C1C1E;
+            case "P": return wFg();   // 다크 모드에서도 보이게
             case "D": return 0xFF1E7E34;
             case "R": return 0xFFB3261E;
             case "N": return 0xFFE0661A;
         }
-        return TILE_FG;
+        return wFg();
     }
 
     /** 숫자 + 작은 단위 (예: 500 + 작은 km) */
@@ -1177,7 +1278,7 @@ public class OverlayService extends Service {
         sb.append(unit);
         sb.setSpan(new android.text.style.RelativeSizeSpan(0.5f), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
-        sb.setSpan(new android.text.style.ForegroundColorSpan(TILE_LABEL), start, sb.length(),
+        sb.setSpan(new android.text.style.ForegroundColorSpan(wLabel()), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
         return sb;
     }
@@ -1210,7 +1311,7 @@ public class OverlayService extends Service {
             accumulateEff();
             if (effDist > 0.3f && effEnergy > 0.05f)
                 m.put(ShortcutStore.KEY_V_EFF,
-                        String.format(Locale.US, "%.1f", effDist / effEnergy));
+                        String.format(Locale.US, "%.3f", effDist / effEnergy));   // 원본 km/kWh
         }
         return m;
     }
@@ -1278,10 +1379,10 @@ public class OverlayService extends Service {
             TextView t = new TextView(this);
             t.setText(s.label.isEmpty() ? "?" : s.label);
             t.setGravity(Gravity.CENTER);
-            t.setTextColor(TILE_FG);
+            t.setTextColor(SHORTCUT_FG);
             t.setTextSize(TypedValue.COMPLEX_UNIT_PX, side * 0.30f);
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(TILE_BG);
+            bg.setColor(SHORTCUT_BG);
             bg.setCornerRadius(side * CalendarTile.CORNER_RATIO);
             t.setBackground(bg);
             LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(side, side);
@@ -1400,9 +1501,10 @@ public class OverlayService extends Service {
     private void clampSize(int dockW, int dockH) {
         if (dock == null) return;
         DisplayMetrics dm = realMetrics();
-        int minX = d(2), minY = insetTop();
-        int maxX = dm.widthPixels - dockW - d(2);
-        int maxY = dm.heightPixels - insetBottom() - dockH - d(2);
+        int m = gridActive ? 0 : d(2);   // 그리드는 벽에 딱 붙게 여백 0
+        int minX = m, minY = gridActive ? 0 : insetTop();
+        int maxX = dm.widthPixels - dockW - m;
+        int maxY = dm.heightPixels - insetBottom() - dockH - m;
         if (maxX < minX) maxX = minX;
         if (maxY < minY) maxY = minY;
         if (lp.x < minX) lp.x = minX;
@@ -1432,51 +1534,7 @@ public class OverlayService extends Service {
      */
     private void applySnapFromPosition() {
         if (dock == null) return;
-        DisplayMetrics dm = realMetrics();
-        int sw = dm.widthPixels, sh = dm.heightPixels;
-        int w = dock.getWidth(), h = dock.getHeight();
-        int it = insetTop(), ib = insetBottom();
-
-        String curOri = sp.getString(mk(KEY_ORI), "h");
-
-        // 1) 홈 화면 + 최우측 타일 헤더 영역 → 그리드 '위치 스냅'
-        int tileW = px(GRID_TILE_W_DP), tileH = px(GRID_TILE_H_DP);
-        int headerH = px(CARD_ICON_DP + CARD_ICON_MARGIN_DP * 2);
-        int colX0 = sw - tileW - d(8);
-        int probeX = lp.x + w / 2;
-        int probeY = lp.y + Math.min(h, headerH) / 2;
-        int botTileTop = sh - ib - tileH;
-        boolean inRightCol = homeFgNow && "home".equals(mode) && probeX >= colX0;
-        String gridEdge = null;
-        if (inRightCol && probeY <= it + headerH) gridEdge = "gridTop";
-        else if (inRightCol && probeY >= botTileTop && probeY <= botTileTop + headerH) gridEdge = "gridBottom";
-
-        if (gridEdge != null) {
-            if (!"g".equals(curOri)) {
-                pendingSnapEdge = gridEdge;
-                sp.edit().putString(mk(KEY_ORI), "g")
-                        .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
-            } else {
-                applySnapEdge(gridEdge);
-            }
-            return;
-        }
-
-        // 2) 상단 밴드 = 가로, 좌측 밴드 = 세로 (자동 전환, 위치는 제자리 피벗)
-        int thresh = px(SNAP_EDGE_DP);
-        int dTop = lp.y - it, dLeft = lp.x;
-        String target = curOri;
-        if (Math.min(dTop, dLeft) <= thresh) {
-            target = (dTop <= dLeft) ? "h" : "v";
-        }
-        if (!target.equals(curOri)) {
-            // 자동 전환: 좌상단(손잡이 쪽) 위치를 그대로 두고 방향만 바꿈 — 위치 스냅/이동 없음
-            sp.edit().putString(mk(KEY_ORI), target)
-                    .putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
-            return;
-        }
-
-        // 3) 전환 없음: 위치만 저장
+        // 드래그는 위치 이동만 — 자동 전환/스냅 없음. 배치 전환은 편집 패널에서만.
         sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
     }
 
@@ -1584,16 +1642,18 @@ public class OverlayService extends Service {
                     touchY = e.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    // 드래그 중엔 손가락만 따라감 (재구성/전환 없음 → 항상 매끄럽게)
+                    if (gridActive) return true;   // 그리드는 위치 고정 (드래그 불가)
+                    // 드래그 중엔 손가락만 따라감
                     lp.x = startX + (int) (e.getRawX() - touchX);
                     lp.y = startY + (int) (e.getRawY() - touchY);
                     clamp();
                     wm.updateViewLayout(dock, lp);
                     return true;
                 case MotionEvent.ACTION_UP:
+                    if (gridActive) return true;   // 그리드는 위치 저장 안 함
                     clamp();
                     wm.updateViewLayout(dock, lp);
-                    snapAfterDrag();   // 손 뗄 때: 그리드 타일 영역이면 스냅, 아니면 위치 저장
+                    snapAfterDrag();   // 위치 저장
                     return true;
             }
             return false;
@@ -1626,6 +1686,72 @@ public class OverlayService extends Service {
         return Math.round(dp * getResources().getDisplayMetrics().density);
     }
 
+    // 위젯 타일 색 (다크 모드 토글) — 바로가기는 제외
+    private boolean darkW() {
+        return sp.getBoolean(ShortcutStore.KEY_DARK, false);
+    }
+
+    private int wBg() {
+        return darkW() ? 0xFF2A2B2E : 0xFFFFFFFF;
+    }
+
+    private int wFg() {
+        return darkW() ? 0xFFF2F3F5 : 0xFF1C1C1E;
+    }
+
+    private int wLabel() {
+        return darkW() ? 0xFFB5BAC2 : 0xFF4E5157;
+    }
+
+    // 속도 단위 (km/h ↔ mph)
+    private boolean speedMph() {
+        return sp.getBoolean(ShortcutStore.KEY_SPEED_MPH, false);
+    }
+
+    private String speedUnit() {
+        return speedMph() ? "mph" : "km/h";
+    }
+
+    /** km/h 정수를 현재 단위 문자열로 변환 */
+    private String speedNum(int kmh) {
+        if (kmh < 0) return "—";
+        return String.valueOf(speedMph() ? Math.round(kmh * 0.621371f) : kmh);
+    }
+
+    private void toggleSpeedUnit() {
+        sp.edit().putBoolean(ShortcutStore.KEY_SPEED_MPH, !speedMph()).apply();
+    }
+
+    // 전비 단위 (km/kWh ↔ Wh/km)
+    private boolean effWhkm() {
+        return sp.getBoolean(ShortcutStore.KEY_EFF_WHKM, false);
+    }
+
+    private String effUnit() {
+        return effWhkm() ? "kWh/100km" : "km/kWh";
+    }
+
+    /** km/kWh 실수를 현재 단위 문자열로 */
+    private String effNum(float kmPerKwh) {
+        if (kmPerKwh <= 0) return "—";
+        return effWhkm()
+                ? String.format(java.util.Locale.US, "%.1f", 100f / kmPerKwh)  // kWh/100km
+                : String.format(java.util.Locale.US, "%.1f", kmPerKwh);
+    }
+
+    private float parseFloatSafe(CharSequence s) {
+        if (s == null) return -1f;
+        try {
+            return Float.parseFloat(s.toString().trim());
+        } catch (Exception e) {
+            return -1f;
+        }
+    }
+
+    private void toggleEffUnit() {
+        sp.edit().putBoolean(ShortcutStore.KEY_EFF_WHKM, !effWhkm()).apply();
+    }
+
     /** 독 불투명도 0.2~1.0 (그리드는 항상 불투명 고정) */
     private float dockAlpha() {
         if (gridActive) return 1f;
@@ -1650,6 +1776,7 @@ public class OverlayService extends Service {
         if (pageW <= 0) return;
         int page = Math.round(pager.getScrollX() / (float) pageW);
         page = Math.max(0, Math.min(pages - 1, page));
+        gridPage = page;   // 재구성 후 유지용
         pager.smoothScrollTo(page * pageW, 0);
         if (gridDots != null) {
             for (int i = 0; i < gridDots.getChildCount(); i++) {
