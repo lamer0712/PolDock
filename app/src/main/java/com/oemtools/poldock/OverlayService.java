@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -58,6 +59,7 @@ public class OverlayService extends Service {
             "com.ecarx.displayarea.core.STATE_COMPONENT_UPDATE";
     private static final String ECARX_DISPLAY_AREA_EXTRA_STATE =
             "com.ecarx.displayarea.core.CURRENT_STATE";
+    private static final long DISPLAY_AREA_POLL_MS = 2000L;
     static final String ACTION_SHORTCUT_ADDED =
             "com.oemtools.poldock.action.SHORTCUT_ADDED";
     private static final int TILE_DP = 52;
@@ -80,6 +82,7 @@ public class OverlayService extends Service {
     private GradientDrawable barBg;
     private LinearLayout shortcutRow;
     private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
+    private MonthCalendarView dateCalendarView;
     private TextView speedLabel, effLabel;
     private ImageView weatherIconView, musicArt, carSweep, speedNeedle, speedGauge;
     private TextView musicPh;
@@ -120,6 +123,7 @@ public class OverlayService extends Service {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private VehicleInfo vehicle;
+    private EfficiencyTracker efficiencyTracker;
     private HandlerThread vehThread;
     private Handler vehHandler;
     private android.view.GestureDetector handleGesture;
@@ -133,6 +137,13 @@ public class OverlayService extends Service {
     private String pendingDockScrollMode;
     private String mode = "default";   // 현재 배치 모드: default / home
     private boolean homeFgNow;
+    private final Runnable displayAreaPoll = new Runnable() {
+        @Override
+        public void run() {
+            refreshDisplayAreaState();
+            ui.postDelayed(this, DISPLAY_AREA_POLL_MS);
+        }
+    };
 
     /** 현재 모드의 pref 키 (home 모드는 _home 접미사) */
     private String mk(String base) {
@@ -158,6 +169,7 @@ public class OverlayService extends Service {
                     return;
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
+                if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
                 if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
                     updateSpeedUnitUi();
@@ -211,7 +223,11 @@ public class OverlayService extends Service {
         super.onCreate();
         isRunning = true;
         sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
-        sp.edit().putBoolean(ShortcutStore.KEY_HOME_PROFILE, true).apply();  // 홈 전용 배치 항상 켜짐
+        // 편집 중 강제한 모드가 전원 종료로 남아도 다음 실행은 실제 화면을 따라간다.
+        sp.edit()
+                .putBoolean(ShortcutStore.KEY_HOME_PROFILE, true)
+                .putString(ShortcutStore.KEY_EDIT_MODE, "auto")
+                .apply();
         handleGesture = new android.view.GestureDetector(this,
                 new android.view.GestureDetector.SimpleOnGestureListener() {
                     @Override
@@ -312,7 +328,8 @@ public class OverlayService extends Service {
             float cell = Math.min(lp.width / (float) gc, gridH / gr);
             float tilePx = cell * 0.82f;                 // 셀 안에 여백을 두고 채움
             SCALE = tilePx / (TILE_DP * density);
-            SCALE = Math.max(0.5f, Math.min(4f, SCALE)); // 과대/과소 방지
+            float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
+            SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
             // 그리드: 위치 고정 (드래그 불가) — 우상단/우하단 타일에 벽 딱 붙게
             DisplayMetrics gdm = realMetrics();
             lp.x = gdm.widthPixels - lp.width;
@@ -349,6 +366,7 @@ public class OverlayService extends Service {
         dustShowPm25 = false;
         ui.removeCallbacks(dustRevert);
         dateWeekday = null;
+        dateCalendarView = null;
         timeView = null;
         musicArt = null;
         musicPh = null;
@@ -396,8 +414,7 @@ public class OverlayService extends Service {
             TextView appName = new TextView(this);
             appName.setText("PolDock");
             appName.setTextColor(0xFFFFFFFF);
-            appName.setTypeface(appName.getTypeface(), android.graphics.Typeface.BOLD);
-            appName.setTextSize(TypedValue.COMPLEX_UNIT_PX, ic * 0.42f);
+            appName.setTextSize(TypedValue.COMPLEX_UNIT_PX, ic * 0.63f);
             appName.setGravity(Gravity.CENTER_VERTICAL);
             appName.setIncludeFontPadding(false);
             appName.setSingleLine(true);
@@ -659,12 +676,50 @@ public class OverlayService extends Service {
 
     private View buildDateTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(wBg());
+        final float radius = side * CalendarTile.CORNER_RATIO;
+        FrameLayout tile = new FrameLayout(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(wBg());
+        bg.setCornerRadius(radius);
+        tile.setBackground(bg);
+        tile.setClipToOutline(true);
+        tile.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+
+        LinearLayout date = new LinearLayout(this);
+        date.setOrientation(LinearLayout.VERTICAL);
+        date.setGravity(Gravity.CENTER);
         dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
-        dateDay = valueText(side);                                 // 날짜 (아래, 값)
-        box.addView(dateWeekday);
-        box.addView(dateDay);
-        return box;
+        dateDay = valueText(side);                              // 날짜 (아래, 값)
+        date.addView(dateWeekday);
+        date.addView(dateDay);
+        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+
+        dateCalendarView = new MonthCalendarView(this);
+        dateCalendarView.setColors(wFg(), wLabel(), Ui.ACCENT);
+        int inset = Math.max(1, Math.round(side * 0.04f));
+        FrameLayout.LayoutParams calendarLp = new FrameLayout.LayoutParams(
+                side - inset * 2, side - inset * 2, Gravity.CENTER);
+        tile.addView(dateCalendarView, calendarLp);
+
+        boolean calendar = sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
+        date.setVisibility(calendar ? View.GONE : View.VISIBLE);
+        dateCalendarView.setVisibility(calendar ? View.VISIBLE : View.GONE);
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> {
+            boolean show = !sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
+            sp.edit().putBoolean(ShortcutStore.KEY_DATE_CALENDAR, show).apply();
+            date.setVisibility(show ? View.GONE : View.VISIBLE);
+            dateCalendarView.setVisibility(show ? View.VISIBLE : View.GONE);
+        });
+
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(side, side);
+        layout.setMargins(d(5), d(3), d(5), d(3));
+        tile.setLayoutParams(layout);
+        return tile;
     }
 
     private View buildTimeTile() {
@@ -724,6 +779,7 @@ public class OverlayService extends Service {
             Date now = new Date();
             dateWeekday.setText(new SimpleDateFormat("E", Locale.getDefault()).format(now));
             dateDay.setText(new SimpleDateFormat("d", Locale.getDefault()).format(now));
+            if (dateCalendarView != null) dateCalendarView.setDate(now);
         }
         if (timeView != null) {
             java.util.Calendar cal = java.util.Calendar.getInstance();
@@ -1319,6 +1375,7 @@ public class OverlayService extends Service {
 
     private void startVehicle() {
         vehicle = new VehicleInfo();
+        efficiencyTracker = new EfficiencyTracker(sp);
         vehThread = new HandlerThread("veh");
         vehThread.start();
         vehHandler = new Handler(vehThread.getLooper());
@@ -1484,34 +1541,28 @@ public class OverlayService extends Service {
             Integer t = vehicle.outsideTemp();
             if (t != null) m.put(ShortcutStore.KEY_V_TEMP, t + "°");
         }
-        // 전비: 속도 적분(거리) + 배터리 Wh 변화(에너지) 누적 → km/kWh
         if (vehValues.containsKey(ShortcutStore.KEY_V_EFF)) {
-            accumulateEff();
-            if (effDist > 0.3f && effEnergy > 0.05f)
-                m.put(ShortcutStore.KEY_V_EFF,
-                        String.format(Locale.US, "%.3f", effDist / effEnergy));   // 원본 km/kWh
+            efficiencyTracker.sample(
+                    SystemClock.elapsedRealtime(),
+                    vehicle.gear(),
+                    vehicle.speedMps(),
+                    vehicle.chargeRateMilliwatts(),
+                    vehicle.batteryWh(),
+                    vehicle.wheelTicks(),
+                    vehicle.wheelMicrometresPerTick());
+
+            Float kwh100km = vehicle.autoTripEfficiencyKwh100km();
+            Float efficiency = kwh100km == null ? null : 100f / kwh100km;
+            if (efficiency == null) efficiency = efficiencyTracker.efficiencyKmPerKwh();
+            if (efficiency == null) {
+                efficiency = efficiencyTracker.calibratedEfficiency(
+                        vehicle.predictedEfficiencyKmPerKwh());
+            }
+            if (efficiency != null && Float.isFinite(efficiency) && efficiency > 0f) {
+                m.put(ShortcutStore.KEY_V_EFF, String.format(Locale.US, "%.3f", efficiency));
+            }
         }
         return m;
-    }
-
-    private float effPrevWh = -1f, effDist = 0f, effEnergy = 0f;
-    private long effLastMs = 0L;
-
-    /** 1초마다 호출 (vehThread). 속도로 거리, 배터리 소비로 에너지 누적. */
-    private void accumulateEff() {
-        Float mps = vehicle.speedMps();
-        Float wh = vehicle.batteryWh();
-        long now = System.currentTimeMillis();
-        if (mps != null && wh != null) {
-            if (effLastMs > 0 && effPrevWh > 0) {
-                float dtH = (now - effLastMs) / 3_600_000f;
-                effDist += Math.abs(mps) * 3.6f * dtH;      // km
-                float used = effPrevWh - wh;                 // Wh 소비(양수만)
-                if (used > 0) effEnergy += used / 1000f;     // kWh
-            }
-            effLastMs = now;
-            effPrevWh = wh;
-        }
     }
 
     private void stopVehicle() {
@@ -1528,6 +1579,7 @@ public class OverlayService extends Service {
             new Thread(v::close).start();
             vehicle = null;
         }
+        efficiencyTracker = null;
     }
 
     // ---------------------------------------------------------------- 바로가기
@@ -1623,7 +1675,9 @@ public class OverlayService extends Service {
     }
 
     private void refreshDisplayAreaState() {
-        displayAreaState = readDisplayAreaState();
+        String state = readDisplayAreaState();
+        // SystemUI가 준비되는 동안 null이 잠시 반환돼도 마지막 유효 상태는 유지한다.
+        if (state != null) displayAreaState = state;
         updateHomeMode();
     }
 
@@ -1631,6 +1685,7 @@ public class OverlayService extends Service {
     private void startDisplayAreaTracking() {
         // 첫 설치 전에 현재 상태를 반영한다. 이 시점에는 아직 독 뷰가 없으므로 재구성하지 않는다.
         displayAreaState = readDisplayAreaState();
+        homeFgNow = isDisplayAreaHome(displayAreaState);
 
         displayAreaObserver = new android.database.ContentObserver(ui) {
             @Override
@@ -1659,9 +1714,14 @@ public class OverlayService extends Service {
                     new android.content.IntentFilter(ECARX_DISPLAY_AREA_UPDATE));
         } catch (Throwable ignored) {
         }
+
+        // 부팅 직후에는 Settings 값/브로드캐스트 등록보다 런처 준비가 늦을 수 있다.
+        ui.removeCallbacks(displayAreaPoll);
+        ui.postDelayed(displayAreaPoll, 500L);
     }
 
     private void stopDisplayAreaTracking() {
+        ui.removeCallbacks(displayAreaPoll);
         if (displayAreaObserver != null) {
             try {
                 getContentResolver().unregisterContentObserver(displayAreaObserver);

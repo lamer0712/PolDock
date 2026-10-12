@@ -106,16 +106,13 @@ public class EditPanel {
                 : WindowManager.LayoutParams.TYPE_PHONE;
         android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
-        int topInset = topSystemBarInset(c);
         WindowManager.LayoutParams wlp = new WindowManager.LayoutParams(
                 Math.max(1, dm.widthPixels / 2),
-                Math.max(1, dm.heightPixels - topInset),
+                WindowManager.LayoutParams.MATCH_PARENT,
                 type,
-                WindowManager.LayoutParams.FLAG_DIM_BEHIND
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND,
                 PixelFormat.TRANSLUCENT);
         wlp.gravity = Gravity.LEFT | Gravity.TOP;
-        wlp.y = topInset;
         wlp.dimAmount = 0.55f;
         wlp.windowAnimations = android.R.style.Animation_InputMethod;
         try {
@@ -147,19 +144,6 @@ public class EditPanel {
         target.post(() -> {
             if (target == sheet) target.fullScroll(View.FOCUS_DOWN);
         });
-    }
-
-    private int topSystemBarInset(Context c) {
-        try {
-            if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets in = wm.getCurrentWindowMetrics().getWindowInsets()
-                        .getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars());
-                return in.top;
-            }
-        } catch (Throwable ignored) {
-        }
-        int id = c.getResources().getIdentifier("status_bar_height", "dimen", "android");
-        return id > 0 ? c.getResources().getDimensionPixelSize(id) : 0;
     }
 
     void hide() {

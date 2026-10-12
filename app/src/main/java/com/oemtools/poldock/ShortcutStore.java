@@ -18,6 +18,7 @@ public class ShortcutStore {
     // 위젯 설정
     static final String KEY_DATE_ON = "date_on";
     static final String KEY_DATE_FMT = "date_fmt";
+    static final String KEY_DATE_CALENDAR = "date_calendar";
     static final String KEY_TIME_ON = "time_on";
     static final String KEY_TIME_FMT = "time_fmt";
     static final String KEY_TIME_ANALOG = "time_analog"; // 시계 위젯: 아날로그 표시
