@@ -11,6 +11,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -62,7 +63,7 @@ public class Ui {
         t.setTextColor(DIM);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         t.setAllCaps(true);
-        t.setLetterSpacing(0.08f);
+        t.setLetterSpacing(0f);
         t.setPadding(dp(c, 4), dp(c, 6), 0, dp(c, 8));
         return t;
     }
@@ -70,7 +71,7 @@ public class Ui {
     static LinearLayout card(Context c) {
         LinearLayout l = new LinearLayout(c);
         l.setOrientation(LinearLayout.VERTICAL);
-        l.setBackground(round(CARD, dp(c, 18)));
+        l.setBackground(round(CARD, dp(c, 8)));
         int p = dp(c, 16);
         l.setPadding(p, p, p, p);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -119,6 +120,37 @@ public class Ui {
         b.setBackground(pressable(color, blend(color), dp(c, 14)));
         b.setOnClickListener(cl);
         return b;
+    }
+
+    static ImageButton compactIconButton(Context c, Drawable icon, String description,
+                                         int color, View.OnClickListener cl) {
+        ImageButton b = new ImageButton(c);
+        b.setImageDrawable(icon);
+        b.setContentDescription(description);
+        b.setScaleType(ImageButton.ScaleType.CENTER);
+        b.setPadding(dp(c, 8), dp(c, 8), dp(c, 8), dp(c, 8));
+        b.setBackground(pressable(color, blend(color), dp(c, 8)));
+        b.setOnClickListener(cl);
+        return b;
+    }
+
+    static View toggleIndicator(Context c, boolean on) {
+        FrameLayout track = new FrameLayout(c);
+        track.setBackground(round(on ? ACCENT : GREY, dp(c, 12)));
+        LinearLayout.LayoutParams trackLp = new LinearLayout.LayoutParams(dp(c, 42), dp(c, 24));
+        trackLp.leftMargin = dp(c, 12);
+        track.setLayoutParams(trackLp);
+
+        View thumb = new View(c);
+        thumb.setBackground(round(Color.WHITE, dp(c, 9)));
+        FrameLayout.LayoutParams thumbLp = new FrameLayout.LayoutParams(dp(c, 18), dp(c, 18));
+        thumbLp.gravity = (on ? Gravity.END : Gravity.START) | Gravity.CENTER_VERTICAL;
+        thumbLp.leftMargin = dp(c, 3);
+        thumbLp.rightMargin = dp(c, 3);
+        thumbLp.topMargin = dp(c, 3);
+        thumbLp.bottomMargin = dp(c, 3);
+        track.addView(thumb, thumbLp);
+        return track;
     }
 
     static EditText field(Context c, String hint) {

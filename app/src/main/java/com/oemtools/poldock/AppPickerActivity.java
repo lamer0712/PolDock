@@ -35,12 +35,11 @@ public class AppPickerActivity extends Activity {
         root.setPadding(pad, Ui.dp(this, 18), pad, Ui.dp(this, 28));
         sc.addView(root);
 
-        root.addView(Ui.title(this, "앱 선택"));
-        TextView sub = new TextView(this);
-        sub.setText("탭하면 도크에 추가됩니다");
-        sub.setTextColor(Ui.DIM);
-        sub.setPadding(Ui.dp(this, 2), Ui.dp(this, 6), 0, Ui.dp(this, 14));
-        root.addView(sub);
+        TextView title = Ui.title(this, "앱 선택");
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleLp.bottomMargin = Ui.dp(this, 14);
+        root.addView(title, titleLp);
 
         LinearLayout box = Ui.card(this);
         root.addView(box);
@@ -68,7 +67,7 @@ public class AppPickerActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(Ui.pressable(Ui.FIELD, 0xFF30343E, Ui.dp(this, 14)));
+        row.setBackground(Ui.pressable(Ui.FIELD, 0xFF30343E, Ui.dp(this, 8)));
         int p = Ui.dp(this, 10);
         row.setPadding(p, p, p, p);
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
