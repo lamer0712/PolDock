@@ -175,6 +175,7 @@ public class OverlayService extends Service {
                     return;
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
+                if (UpdateManager.isInternalPreference(key)) return;
                 if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
                 if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
@@ -367,6 +368,9 @@ public class OverlayService extends Service {
             handle.setTextSize(TypedValue.COMPLEX_UNIT_PX, tileSide() * 0.5f);
             handle.setPadding(d(12), d(8), d(12), d(8));
             bar.addView(handle);
+            if (UpdateManager.isUpdateAvailable(this)) {
+                bar.addView(buildUpdateIndicator(false));
+            }
         }
 
         // 위젯을 저장된 순서대로 수집 (켜진 것만)
@@ -444,6 +448,13 @@ public class OverlayService extends Service {
             FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(ic, ic, Gravity.END | Gravity.TOP);
             hlp.setMargins(0, m, m, 0);
             header.addView(editBtn, hlp);
+            if (UpdateManager.isUpdateAvailable(this)) {
+                View update = buildUpdateIndicator(true);
+                FrameLayout.LayoutParams ulp = new FrameLayout.LayoutParams(
+                        ic, ic, Gravity.END | Gravity.TOP);
+                ulp.setMargins(0, m, m * 2 + ic, 0);
+                header.addView(update, ulp);
+            }
             // 헤더 가운데: 페이지 표시 점 (여러 페이지일 때만)
             gridDots = null;
             if (pages > 1) {
@@ -587,6 +598,22 @@ public class OverlayService extends Service {
         });
 
         if (hasVehWidget) startVehicle();
+    }
+
+    private View buildUpdateIndicator(boolean grid) {
+        ImageView icon = new ImageView(this);
+        icon.setImageDrawable(new UpdateIconDrawable());
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setContentDescription("업데이트 있음");
+        icon.setClickable(true);
+        icon.setOnClickListener(v -> UpdateManager.openUpdatePrompt(this));
+        int padding = grid ? px(8) : d(8);
+        icon.setPadding(padding, padding, padding, padding);
+        if (!grid) {
+            int side = d(48);
+            icon.setLayoutParams(new LinearLayout.LayoutParams(side, side));
+        }
+        return icon;
     }
 
     /** 재구성되는 가로/세로 독의 스크롤 위치를 현재 모드 기준으로 보관한다. */

@@ -29,6 +29,7 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         DownloadManager manager = (DownloadManager) context.getSystemService(
                 Context.DOWNLOAD_SERVICE);
         if (manager == null || !downloadSucceeded(manager, completedId)) {
+            prefs.edit().putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true).apply();
             clearDownload(prefs);
             UpdateManager.notifyResult(context, "PolDock 업데이트 실패",
                     "APK를 다운로드하지 못했습니다.", null);
@@ -39,6 +40,7 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         String error = verifyApk(context, new File(path));
         if (error != null) {
             new File(path).delete();
+            prefs.edit().putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true).apply();
             clearDownload(prefs);
             UpdateManager.notifyResult(context, "PolDock 업데이트 검증 실패", error, null);
             return;

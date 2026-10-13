@@ -296,6 +296,17 @@ public class EditPanel {
             hide();
             svc.stopSelf();
         }));
+
+        TextView appInfo = new TextView(c);
+        appInfo.setText("PolDock v" + BuildConfig.VERSION_NAME + "\n개발자 · 로로아빠");
+        appInfo.setTextColor(Ui.DIM);
+        appInfo.setTextSize(11);
+        appInfo.setGravity(Gravity.CENTER);
+        appInfo.setLetterSpacing(0f);
+        appInfo.setLineSpacing(0, 1.15f);
+        appInfo.setPadding(0, Ui.dp(c, 16), 0, Ui.dp(c, 6));
+        body.addView(appInfo, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     // 배치 + 크기/그리드

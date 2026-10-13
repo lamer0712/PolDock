@@ -39,6 +39,7 @@ final class UpdateManager {
     static final String KEY_DOWNLOAD_ID = "ota_download_id";
     static final String KEY_DOWNLOAD_PATH = "ota_download_path";
     static final String KEY_DOWNLOAD_VERSION = "ota_download_version";
+    static final String KEY_UPDATE_AVAILABLE = "ota_update_available";
 
     private static final String TAG = "PolDockUpdate";
     private static final String CHANNEL = "poldock_updates";
@@ -62,8 +63,11 @@ final class UpdateManager {
         new Thread(() -> {
             try {
                 Release release = fetchLatestRelease(app, repository);
-                if (release != null && compareVersions(release.version, BuildConfig.VERSION_NAME) > 0) {
-                    notifyAvailable(app, release);
+                if (release != null) {
+                    boolean available = compareVersions(
+                            release.version, BuildConfig.VERSION_NAME) > 0;
+                    prefs(app).edit().putBoolean(KEY_UPDATE_AVAILABLE, available).apply();
+                    if (available) notifyAvailable(app, release);
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Update check failed", e);
@@ -136,6 +140,21 @@ final class UpdateManager {
         return version.isEmpty() || url.isEmpty() ? null : new Release(version, asset, url);
     }
 
+    static boolean isUpdateAvailable(Context context) {
+        return prefs(context).getBoolean(KEY_UPDATE_AVAILABLE, false);
+    }
+
+    static boolean isInternalPreference(String key) {
+        return key != null && key.startsWith("ota_") && !KEY_UPDATE_AVAILABLE.equals(key);
+    }
+
+    static void openUpdatePrompt(Context context) {
+        Release release = releaseFromCache(prefs(context));
+        if (release == null) return;
+        context.startActivity(updateIntent(context, release)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    }
+
     private static String readText(InputStream input) throws Exception {
         StringBuilder result = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
@@ -148,10 +167,7 @@ final class UpdateManager {
 
     private static void notifyAvailable(Context context, Release release) {
         ensureChannel(context);
-        Intent intent = new Intent(context, UpdateActivity.class)
-                .putExtra(EXTRA_VERSION, release.version)
-                .putExtra(EXTRA_ASSET, release.assetName)
-                .putExtra(EXTRA_URL, release.url);
+        Intent intent = updateIntent(context, release);
         PendingIntent action = PendingIntent.getActivity(context, AVAILABLE_NOTIFICATION, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag());
 
@@ -162,6 +178,13 @@ final class UpdateManager {
                 .setContentIntent(action)
                 .setAutoCancel(true);
         notificationManager(context).notify(AVAILABLE_NOTIFICATION, builder.build());
+    }
+
+    private static Intent updateIntent(Context context, Release release) {
+        return new Intent(context, UpdateActivity.class)
+                .putExtra(EXTRA_VERSION, release.version)
+                .putExtra(EXTRA_ASSET, release.assetName)
+                .putExtra(EXTRA_URL, release.url);
     }
 
     static long enqueueDownload(Context context, String version, String url) {
@@ -187,6 +210,7 @@ final class UpdateManager {
                 .putLong(KEY_DOWNLOAD_ID, id)
                 .putString(KEY_DOWNLOAD_PATH, target.getAbsolutePath())
                 .putString(KEY_DOWNLOAD_VERSION, version)
+                .putBoolean(KEY_UPDATE_AVAILABLE, false)
                 .apply();
         notificationManager(context).cancel(AVAILABLE_NOTIFICATION);
         return id;
