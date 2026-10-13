@@ -284,7 +284,10 @@ public class EditPanel {
             update.setScaleType(ImageView.ScaleType.FIT_CENTER);
             update.setPadding(Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10));
             update.setContentDescription("업데이트 있음");
-            update.setOnClickListener(v -> UpdateManager.openUpdatePrompt(c));
+            update.setOnClickListener(v -> {
+                hide();
+                UpdateManager.openUpdatePrompt(c);
+            });
             LinearLayout.LayoutParams updateLp = new LinearLayout.LayoutParams(
                     Ui.dp(c, 48), Ui.dp(c, 48));
             updateLp.rightMargin = Ui.dp(c, 6);

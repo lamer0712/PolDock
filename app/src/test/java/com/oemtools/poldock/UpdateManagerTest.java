@@ -16,5 +16,6 @@ public class UpdateManagerTest {
         assertTrue(UpdateManager.compareVersions("v1.3.1", "1.3") > 0);
         assertTrue(UpdateManager.compareVersions("v1.3.2", "1.3.1") > 0);
         assertTrue(UpdateManager.compareVersions("v1.3.3", "1.3.2") > 0);
+        assertTrue(UpdateManager.compareVersions("v1.3.4", "1.3.3") > 0);
     }
 }
