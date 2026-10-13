@@ -318,8 +318,12 @@ public class OverlayService extends Service {
         // 그리드: 런처 타일 크기로 강제 (각진 사각 박스), 비율 슬라이더 무시 / 그 외: 둥근 독
         if (grid) {
             float density = getResources().getDisplayMetrics().density;
+            DisplayMetrics gdm = realMetrics();
+            String gridPosition = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
             lp.width = Math.round(GRID_TILE_W_DP * density);
-            lp.height = Math.round(GRID_TILE_H_DP * density);
+            lp.height = "right".equals(gridPosition)
+                    ? Math.max(1, gdm.heightPixels - insetTop() - insetBottom())
+                    : Math.round(GRID_TILE_H_DP * density);
             bar.setPadding(0, 0, 0, 0);
             // 셀 크기에 맞춰 위젯 스케일을 산출 → 슬라이더(SCALE) 대신 타일/격자 기준
             int gc = Math.max(1, Math.min(6, sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID)));
@@ -330,13 +334,15 @@ public class OverlayService extends Service {
             SCALE = tilePx / (TILE_DP * density);
             float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
             SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
-            // 그리드: 위치 고정 (드래그 불가) — 우상단/우하단 타일에 벽 딱 붙게
-            DisplayMetrics gdm = realMetrics();
+            // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용
             lp.x = gdm.widthPixels - lp.width;
-            if ("bottom".equals(sp.getString(ShortcutStore.KEY_GRID_POS, "top")))
+            if ("bottom".equals(gridPosition)) {
                 lp.y = gdm.heightPixels - insetBottom() - lp.height;
-            else
+            } else if ("right".equals(gridPosition)) {
+                lp.y = insetTop();
+            } else {
                 lp.y = insetTop();   // 상단은 상태바 아래에 (너무 올라가지 않게)
+            }
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -1835,6 +1841,7 @@ public class OverlayService extends Service {
         int it = insetTop(), ib = insetBottom();
         switch (edge) {
             case "gridTop":    lp.x = sw - w - d(4); lp.y = it + d(4); break;
+            case "gridRight":  lp.x = sw - w - d(4); lp.y = it + (sh - it - ib - h) / 2; break;
             case "gridBottom": lp.x = sw - w - d(4); lp.y = sh - ib - h - d(4); break;
         }
         clamp();

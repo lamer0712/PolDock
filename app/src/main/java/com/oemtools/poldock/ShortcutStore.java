@@ -47,7 +47,7 @@ public class ShortcutStore {
     static final String KEY_GRID_C = "grid_cols";          // 그리드 열
     static final String KEY_GRID_R = "grid_rows";          // 그리드 행
     static final int DEFAULT_GRID = 3;
-    static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top(우상단)/bottom(우하단)
+    static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top/right/bottom
 
     static final String DEFAULT_DATE_FMT = "M월 d일 (E)";
     static final String DEFAULT_TIME_FMT = "a h:mm";

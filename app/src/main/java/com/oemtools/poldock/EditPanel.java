@@ -224,15 +224,17 @@ public class EditPanel {
             int rows = sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
             card.addView(gridStepper(c, "열 (가로 칸)", ShortcutStore.KEY_GRID_C, cols));
             card.addView(gridStepper(c, "행 (세로 칸)", ShortcutStore.KEY_GRID_R, rows));
-            // 위치: 우상단 / 우하단 (드래그 불가, 여기서 선택)
+            // 위치: 우상단 / 상하 통합 / 우하단 (드래그 불가, 여기서 선택)
             String gpos = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
             card.addView(Ui.fieldLabel(c, "위치"));
             card.addView(Ui.rowGap(c,
                     Ui.button(c, "우상단", "top".equals(gpos) ? Ui.ACCENT : Ui.GREY,
                             v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "top").apply()),
+                    Ui.button(c, "우측(통합)", "right".equals(gpos) ? Ui.ACCENT : Ui.GREY,
+                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "right").apply()),
                     Ui.button(c, "우하단", "bottom".equals(gpos) ? Ui.ACCENT : Ui.GREY,
                             v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "bottom").apply())));
-            TextView n = Ui.fieldLabel(c, "그리드는 런처 타일 크기로 고정되며, 위치는 드래그 대신 위에서 선택합니다.");
+            TextView n = Ui.fieldLabel(c, "우측(통합)은 우상단·우하단을 합친 전체 높이입니다.");
             card.addView(n);
         } else {
             int pct = sp.getInt(scaleKeyE(), ShortcutStore.DEFAULT_SCALE);
