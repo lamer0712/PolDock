@@ -426,6 +426,9 @@ public class OverlayService extends Service {
             // 런처 카드 헤더: 좌상단 앱 아이콘 + 우상단 핸들(편집 버튼 자리)
             int ic = px(CARD_ICON_DP), m = px(CARD_ICON_MARGIN_DP);
             FrameLayout header = new FrameLayout(this);
+            int headerBase = ShortcutStore.DEFAULT_GRID_BG_COLOR;
+            header.setBackgroundColor(Color.argb(102, Color.red(headerBase),
+                    Color.green(headerBase), Color.blue(headerBase)));
             header.setOnTouchListener(new DragHandle());   // 헤더 드래그로 독 이동
             TextView appName = new TextView(this);
             appName.setText("PolDock");
