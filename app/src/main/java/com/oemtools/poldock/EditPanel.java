@@ -278,6 +278,18 @@ public class EditPanel {
         TextView t = Ui.title(c, "독 편집");
         header.addView(t, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (UpdateManager.isUpdateAvailable(c)) {
+            ImageView update = new ImageView(c);
+            update.setImageDrawable(new UpdateIconDrawable());
+            update.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            update.setPadding(Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10));
+            update.setContentDescription("업데이트 있음");
+            update.setOnClickListener(v -> UpdateManager.openUpdatePrompt(c));
+            LinearLayout.LayoutParams updateLp = new LinearLayout.LayoutParams(
+                    Ui.dp(c, 48), Ui.dp(c, 48));
+            updateLp.rightMargin = Ui.dp(c, 6);
+            header.addView(update, updateLp);
+        }
         TextView close = Ui.chip(c, "×", Ui.GREY, v -> hide());
         close.setTextSize(24);
         close.setContentDescription("닫기");
