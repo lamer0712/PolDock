@@ -38,6 +38,16 @@ public class LaunchActivity extends Activity {
         }
 
         SharedPreferences sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
+        UpdateManager.prepareNotifications(this);
+        if (Build.VERSION.SDK_INT < 33
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) {
+            UpdateManager.checkForUpdate(this);
+        }
+        continueOnboarding(sp);
+    }
+
+    private void continueOnboarding(SharedPreferences sp) {
         if (sp.getBoolean(KEY_ONBOARDED, false)) {
             finish();
             return;
