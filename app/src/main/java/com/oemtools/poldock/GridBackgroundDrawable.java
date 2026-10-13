@@ -12,7 +12,7 @@ import android.graphics.drawable.Drawable;
 
 import java.io.File;
 
-/** 큰 사진을 적당히 축소해 읽고 그리드 전체에 중앙 크롭으로 그린다. */
+/** 큰 사진을 적당히 축소해 읽고 원본 비율 그대로 하단 중앙에 맞춰 그린다. */
 final class GridBackgroundDrawable extends Drawable {
     private static final int MAX_DECODE_SIDE = 2048;
     private final Bitmap bitmap;
@@ -47,18 +47,15 @@ final class GridBackgroundDrawable extends Drawable {
         if (bounds.isEmpty()) return;
         canvas.drawColor(ShortcutStore.DEFAULT_GRID_BG_COLOR);
 
-        int sourceSide = Math.min(bitmap.getWidth(), bitmap.getHeight());
-        if (bitmap.getWidth() > bitmap.getHeight()) {
-            int left = (bitmap.getWidth() - sourceSide) / 2;
-            source.set(left, 0, left + sourceSide, sourceSide);
-        } else {
-            int top = (bitmap.getHeight() - sourceSide) / 2;
-            source.set(0, top, sourceSide, top + sourceSide);
-        }
-
-        int side = Math.min(bounds.width(), bounds.height());
-        float left = bounds.left + (bounds.width() - side) / 2f;
-        destination.set(left, bounds.bottom - side, left + side, bounds.bottom);
+        source.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
+        float scale = Math.min(
+                bounds.width() / (float) bitmap.getWidth(),
+                bounds.height() / (float) bitmap.getHeight());
+        float width = bitmap.getWidth() * scale;
+        float height = bitmap.getHeight() * scale;
+        float left = bounds.left + (bounds.width() - width) / 2f;
+        float top = bounds.bottom - height;
+        destination.set(left, top, left + width, bounds.bottom);
         canvas.drawBitmap(bitmap, source, destination, paint);
     }
 

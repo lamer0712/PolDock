@@ -353,8 +353,7 @@ public class EditPanel {
         Context c = svc;
         int initial = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
                 ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
-        float[] hsv = new float[3];
-        Color.colorToHSV(initial, hsv);
+        int[] rgb = {Color.red(initial), Color.green(initial), Color.blue(initial)};
 
         LinearLayout panel = new LinearLayout(c);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -365,45 +364,45 @@ public class EditPanel {
         panel.addView(preview, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(c, 72)));
 
-        TextView hueLabel = Ui.fieldLabel(c, "색상 " + Math.round(hsv[0]) + "°");
-        TextView saturationLabel = Ui.fieldLabel(c,
-                "채도 " + Math.round(hsv[1] * 100f) + "%");
-        TextView valueLabel = Ui.fieldLabel(c,
-                "밝기 " + Math.round(hsv[2] * 100f) + "%");
-        panel.addView(hueLabel);
-        SeekBar hue = colorSeek(c, 360, Math.round(hsv[0]));
-        panel.addView(hue);
-        panel.addView(saturationLabel);
-        SeekBar saturation = colorSeek(c, 100, Math.round(hsv[1] * 100f));
-        panel.addView(saturation);
-        panel.addView(valueLabel);
-        SeekBar value = colorSeek(c, 100, Math.round(hsv[2] * 100f));
-        panel.addView(value);
+        TextView redLabel = Ui.fieldLabel(c, "R  " + rgb[0]);
+        TextView greenLabel = Ui.fieldLabel(c, "G  " + rgb[1]);
+        TextView blueLabel = Ui.fieldLabel(c, "B  " + rgb[2]);
+        panel.addView(redLabel);
+        SeekBar red = colorSeek(c, 255, rgb[0]);
+        panel.addView(red);
+        panel.addView(greenLabel);
+        SeekBar green = colorSeek(c, 255, rgb[1]);
+        panel.addView(green);
+        panel.addView(blueLabel);
+        SeekBar blue = colorSeek(c, 255, rgb[2]);
+        panel.addView(blue);
 
         SeekBar.OnSeekBarChangeListener listener = new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                hsv[0] = hue.getProgress();
-                hsv[1] = saturation.getProgress() / 100f;
-                hsv[2] = value.getProgress() / 100f;
-                hueLabel.setText("색상 " + Math.round(hsv[0]) + "°");
-                saturationLabel.setText("채도 " + Math.round(hsv[1] * 100f) + "%");
-                valueLabel.setText("밝기 " + Math.round(hsv[2] * 100f) + "%");
-                preview.setBackground(Ui.round(Color.HSVToColor(hsv), Ui.dp(c, 8)));
+                rgb[0] = red.getProgress();
+                rgb[1] = green.getProgress();
+                rgb[2] = blue.getProgress();
+                redLabel.setText("R  " + rgb[0]);
+                greenLabel.setText("G  " + rgb[1]);
+                blueLabel.setText("B  " + rgb[2]);
+                preview.setBackground(Ui.round(
+                        Color.rgb(rgb[0], rgb[1], rgb[2]), Ui.dp(c, 8)));
             }
             public void onStartTrackingTouch(SeekBar seekBar) {
             }
             public void onStopTrackingTouch(SeekBar seekBar) {
             }
         };
-        hue.setOnSeekBarChangeListener(listener);
-        saturation.setOnSeekBarChangeListener(listener);
-        value.setOnSeekBarChangeListener(listener);
+        red.setOnSeekBarChangeListener(listener);
+        green.setOnSeekBarChangeListener(listener);
+        blue.setOnSeekBarChangeListener(listener);
 
         AlertDialog dialog = new AlertDialog.Builder(c)
                 .setTitle("그리드 배경색")
                 .setView(panel)
                 .setPositiveButton("적용", (d, w) -> sp.edit()
-                        .putInt(ShortcutStore.KEY_GRID_BG_COLOR, Color.HSVToColor(hsv))
+                        .putInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                                Color.rgb(rgb[0], rgb[1], rgb[2]))
                         .putString(ShortcutStore.KEY_GRID_BG_MODE, "color")
                         .apply())
                 .setNegativeButton("취소", null)
