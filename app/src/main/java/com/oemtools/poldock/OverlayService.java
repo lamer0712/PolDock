@@ -62,6 +62,8 @@ public class OverlayService extends Service {
     private static final long DISPLAY_AREA_POLL_MS = 2000L;
     static final String ACTION_SHORTCUT_ADDED =
             "com.oemtools.poldock.action.SHORTCUT_ADDED";
+    static final String ACTION_GRID_BACKGROUND_CHANGED =
+            "com.oemtools.poldock.action.GRID_BACKGROUND_CHANGED";
     private static final int TILE_DP = 52;
     // 런처 즐겨찾기 카드(타일) 크기: fav_card_width/height (OEM dimens)
     private static final int GRID_TILE_W_DP = 532;
@@ -80,6 +82,8 @@ public class OverlayService extends Service {
     private WindowManager wm;
     private View dock;
     private GradientDrawable barBg;
+    private GridBackgroundDrawable gridPhotoBackground;
+    private long gridPhotoModified;
     private LinearLayout shortcutRow;
     private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
     private MonthCalendarView dateCalendarView;
@@ -554,17 +558,7 @@ public class OverlayService extends Service {
             restoreDockScroll(scroll, vertical);
             rebuildShortcuts();
         }
-        if (barBg != null) {
-            if (grid) {
-                // 런처 타일처럼: 불투명 배경(card_background #141516), 테두리 없음, 각진 사각
-                barBg.setColor(0xFF141516);
-                barBg.setStroke(0, 0);
-                barBg.setCornerRadius(0f);
-            } else {
-                barBg.setColor(0xDD111111);
-                barBg.setStroke(d(1), 0x55FFFFFF);
-            }
-        }
+        applyDockBackground(bar, grid);
         // 재구성 직후 측정값으로 '먼저' 클램프 → 전환 시 드롭위치에 그렸다가 화면 안으로 튀는 2-pass 제거
         if (pendingSnapEdge == null) {
             DisplayMetrics dmc = realMetrics();
@@ -1749,14 +1743,29 @@ public class OverlayService extends Service {
         shortcutAddedReceiver = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                if (intent == null || !ACTION_SHORTCUT_ADDED.equals(intent.getAction())) return;
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (ACTION_GRID_BACKGROUND_CHANGED.equals(action)) {
+                    gridPhotoBackground = null;
+                    gridPhotoModified = 0L;
+                    ui.postDelayed(() -> {
+                        if (!isRunning) return;
+                        if (editPanel != null) editPanel.restoreAfterPhotoPicker();
+                        else openApp();
+                    }, 180);
+                    return;
+                }
+                if (!ACTION_SHORTCUT_ADDED.equals(action)) return;
                 ui.postDelayed(() -> {
                     if (isRunning) openAppAtBottom();
                 }, 180);
             }
         };
         try {
-            registerReceiver(shortcutAddedReceiver, new android.content.IntentFilter(ACTION_SHORTCUT_ADDED));
+            android.content.IntentFilter filter =
+                    new android.content.IntentFilter(ACTION_SHORTCUT_ADDED);
+            filter.addAction(ACTION_GRID_BACKGROUND_CHANGED);
+            registerReceiver(shortcutAddedReceiver, filter);
         } catch (Throwable ignored) {
         }
     }
@@ -2070,6 +2079,39 @@ public class OverlayService extends Service {
 
     private void toggleEffUnit() {
         sp.edit().putBoolean(ShortcutStore.KEY_EFF_WHKM, !effWhkm()).apply();
+    }
+
+    private void applyDockBackground(LinearLayout bar, boolean grid) {
+        if (!grid) {
+            barBg.setColor(0xDD111111);
+            barBg.setStroke(d(1), 0x55FFFFFF);
+            bar.setBackground(barBg);
+            return;
+        }
+
+        String backgroundMode = sp.getString(ShortcutStore.KEY_GRID_BG_MODE, "default");
+        if ("photo".equals(backgroundMode)) {
+            java.io.File photo = new java.io.File(getFilesDir(),
+                    GridBackgroundPickerActivity.PHOTO_FILE);
+            long modified = photo.isFile() ? photo.lastModified() : 0L;
+            if (gridPhotoBackground == null || gridPhotoModified != modified) {
+                gridPhotoBackground = GridBackgroundDrawable.load(photo);
+                gridPhotoModified = modified;
+            }
+            if (gridPhotoBackground != null) {
+                bar.setBackground(gridPhotoBackground);
+                return;
+            }
+        }
+
+        int color = "color".equals(backgroundMode)
+                ? sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                        ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000
+                : ShortcutStore.DEFAULT_GRID_BG_COLOR;
+        barBg.setColor(color);
+        barBg.setStroke(0, 0);
+        barBg.setCornerRadius(0f);
+        bar.setBackground(barBg);
     }
 
     /** 독 불투명도 0.2~1.0 (그리드는 항상 불투명 고정) */
