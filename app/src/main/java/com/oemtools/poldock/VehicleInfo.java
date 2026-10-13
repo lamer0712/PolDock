@@ -1,8 +1,10 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.content.Context;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Method;
+import java.util.List;
 
 /**
  * Android Car API(CarPropertyManager)로 VHAL 속성을 읽는다. 전부 리플렉션이라
@@ -15,6 +17,8 @@ import java.lang.reflect.Method;
  *   EV_BATTERY_LEVEL      291504905 (0x11600309)  CAR_ENERGY(dangerous)  [Wh]
  *   INFO_EV_BATTERY_CAPACITY 291504390 (0x11600306) CAR_ENERGY           [Wh]
  *   RANGE_REMAINING       291504904 (0x11600308)  CAR_ENERGY            [m]
+ *   EV_BATTERY_INSTANTANEOUS_CHARGE_RATE 291504908 (0x1160030C) CAR_ENERGY [mW]
+ *   WHEEL_TICK             290521862 (0x11510306)  CAR_SPEED             [ticks]
  */
 public class VehicleInfo {
 
@@ -24,11 +28,16 @@ public class VehicleInfo {
     public static final int EV_BATTERY_LEVEL = 291504905;
     public static final int INFO_EV_BATTERY_CAPACITY = 291504390;
     public static final int RANGE_REMAINING = 291504904;
+    public static final int EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908;
+    public static final int WHEEL_TICK = 290521862;
 
     private Object car;
     private Object cpm;
     private Method getInt;
     private Method getFloat;
+    private Method getTypedProperty;
+    private Method getPropertyConfig;
+    private int[] wheelMicrometresPerTick;
     private boolean connected;
 
     boolean connect(Context ctx) {
@@ -42,6 +51,15 @@ public class VehicleInfo {
             if (cpm == null) return false;
             getInt = cpm.getClass().getMethod("getIntProperty", int.class, int.class);
             getFloat = cpm.getClass().getMethod("getFloatProperty", int.class, int.class);
+            try {
+                getTypedProperty = cpm.getClass().getMethod(
+                        "getProperty", Class.class, int.class, int.class);
+                getPropertyConfig = cpm.getClass().getMethod("getCarPropertyConfig", int.class);
+                wheelMicrometresPerTick = readWheelConfig();
+            } catch (Throwable ignored) {
+                getTypedProperty = null;
+                getPropertyConfig = null;
+            }
             connected = true;
         } catch (Throwable t) {
             connected = false;
@@ -96,14 +114,64 @@ public class VehicleInfo {
         return Math.round(c);
     }
 
-    /** 속도 m/s (전비 적분용), 못 읽으면 null */
+    /** 속도 m/s, 못 읽으면 null. */
     Float speedMps() {
         return readFloat(PERF_VEHICLE_SPEED);
     }
 
-    /** 배터리 잔량 에너지 Wh (전비 계산용), 못 읽으면 null */
+    /** 순간 충전(+)/방전(-) 전력 mW, 못 읽으면 null. */
+    Float chargeRateMilliwatts() {
+        return readFloat(EV_BATTERY_INSTANTANEOUS_CHARGE_RATE);
+    }
+
+    /** 현재 남은 배터리 에너지 Wh, 못 읽으면 null. */
     Float batteryWh() {
         return readFloat(EV_BATTERY_LEVEL);
+    }
+
+    /** WHEEL_TICK의 [timestamp, FL, FR, RL, RR], 못 읽으면 null. */
+    long[] wheelTicks() {
+        if (getTypedProperty == null) return null;
+        try {
+            Class<?> boxedLongArray = Array.newInstance(Long.class, 0).getClass();
+            Object property = getTypedProperty.invoke(cpm, boxedLongArray, WHEEL_TICK, 0);
+            if (property == null) return null;
+            Object raw = property.getClass().getMethod("getValue").invoke(property);
+            if (!(raw instanceof Object[])) return null;
+            Object[] values = (Object[]) raw;
+            long[] result = new long[values.length];
+            for (int i = 0; i < values.length; i++) {
+                if (!(values[i] instanceof Number)) return null;
+                result[i] = ((Number) values[i]).longValue();
+            }
+            return result;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    int[] wheelMicrometresPerTick() {
+        return wheelMicrometresPerTick == null ? null : wheelMicrometresPerTick.clone();
+    }
+
+    private int[] readWheelConfig() {
+        if (getPropertyConfig == null) return null;
+        try {
+            Object config = getPropertyConfig.invoke(cpm, WHEEL_TICK);
+            if (config == null) return null;
+            Object raw = config.getClass().getMethod("getConfigArray").invoke(config);
+            if (!(raw instanceof List)) return null;
+            List<?> values = (List<?>) raw;
+            if (values.size() < 5) return null;
+            int[] result = new int[values.size()];
+            for (int i = 0; i < values.size(); i++) {
+                if (!(values.get(i) instanceof Number)) return null;
+                result[i] = ((Number) values.get(i)).intValue();
+            }
+            return result;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 주행가능거리 km, 못 읽으면 null */
@@ -111,6 +179,17 @@ public class VehicleInfo {
         Float m = readFloat(RANGE_REMAINING);
         if (m == null) return null;
         return Math.round(m / 1000f);
+    }
+
+    /** 주행가능거리와 남은 배터리 에너지로 계산한 예상 전비 km/kWh. */
+    Float predictedEfficiencyKmPerKwh() {
+        Float rangeM = readFloat(RANGE_REMAINING);
+        Float remainingWh = readFloat(EV_BATTERY_LEVEL);
+        if (rangeM == null || remainingWh == null || rangeM <= 0f || remainingWh <= 0f) {
+            return null;
+        }
+        float value = rangeM / remainingWh;
+        return Float.isFinite(value) && value > 0f ? value : null;
     }
 
     /** 배터리 %, 못 읽으면 null */

@@ -2,18 +2,40 @@ plugins {
     id 'com.android.application'
 }
 
+def configuredGithubRepository = providers.gradleProperty('poldock.githubRepository')
+        .orElse(providers.environmentVariable('POLDOCK_GITHUB_REPOSITORY'))
+        .getOrElse('')
+def configuredVersionCode = providers.gradleProperty('poldock.versionCode').getOrElse('1')
+def configuredVersionName = providers.gradleProperty('poldock.versionName').getOrElse('1.0')
+
+def githubRepository = configuredGithubRepository
+if (!githubRepository) {
+    def remote = providers.exec {
+        commandLine 'git', 'config', '--get', 'remote.origin.url'
+        ignoreExitValue = true
+    }.standardOutput.asText.get().trim()
+    def match = remote =~ /github\.com[\/:]([^\/]+\/[^\/]+?)(?:\.git)?$/
+    if (match.find()) githubRepository = match.group(1)
+}
+
 android {
-    namespace 'com.oemtools.mirrorfold'
+    namespace 'com.oemtools.poldock'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'com.oemtools.mirrorfold'
+        applicationId 'com.oemtools.poldock'
         // targetSdk 22 이하 → 설치 시 SYSTEM_ALERT_WINDOW 자동 부여 (Android 12 동작).
         // 폴스타4엔 오버레이 허용 설정 화면이 없어 이 방식으로 권한을 받는다.
         minSdk 22
         targetSdk 22
-        versionCode 1
-        versionName '1.0'
+        versionCode configuredVersionCode.toInteger()
+        versionName configuredVersionName
+        buildConfigField 'String', 'GITHUB_REPOSITORY',
+                '"' + githubRepository.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {
@@ -35,4 +57,5 @@ android {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
 }

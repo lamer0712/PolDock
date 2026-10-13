@@ -1,4 +1,4 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.content.Context;
 import android.graphics.Canvas;

@@ -1,4 +1,4 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.annotation.SuppressLint;
 import android.app.Notification;
@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -53,6 +54,16 @@ public class OverlayService extends Service {
     private static final String KEY_X = "x";
     private static final String KEY_Y = "y";
     static final String KEY_ORI = "dock_ori";
+    private static final String ECARX_DISPLAY_AREA_STATE = "com.ecarx.displayarea.STATE";
+    private static final String ECARX_DISPLAY_AREA_UPDATE =
+            "com.ecarx.displayarea.core.STATE_COMPONENT_UPDATE";
+    private static final String ECARX_DISPLAY_AREA_EXTRA_STATE =
+            "com.ecarx.displayarea.core.CURRENT_STATE";
+    private static final long DISPLAY_AREA_POLL_MS = 2000L;
+    static final String ACTION_SHORTCUT_ADDED =
+            "com.oemtools.poldock.action.SHORTCUT_ADDED";
+    static final String ACTION_GRID_BACKGROUND_CHANGED =
+            "com.oemtools.poldock.action.GRID_BACKGROUND_CHANGED";
     private static final int TILE_DP = 52;
     // 런처 즐겨찾기 카드(타일) 크기: fav_card_width/height (OEM dimens)
     private static final int GRID_TILE_W_DP = 532;
@@ -60,10 +71,9 @@ public class OverlayService extends Service {
     // 런처 카드 헤더 아이콘: card_icon_size=64dp, card_icon_margin_*=32dp
     private static final int CARD_ICON_DP = 64;
     private static final int CARD_ICON_MARGIN_DP = 32;
-    // 타일 기본색 = 날짜(캘린더) 타일과 동일: 흰 바탕 + 어두운 내용
-    private static final int TILE_BG = 0xFFFFFFFF;
-    private static final int TILE_FG = 0xFF1C1C1E;
-    private static final int TILE_LABEL = 0xFF4E5157;
+    // 바로가기 등 고정(라이트) 타일색
+    private static final int SHORTCUT_BG = 0xFFFFFFFF;
+    private static final int SHORTCUT_FG = 0xFF1C1C1E;
     private float SCALE = 1.5f;
 
     /** macOS Dock 컨테이너 코너 ≈ 두께의 25% */
@@ -72,8 +82,14 @@ public class OverlayService extends Service {
     private WindowManager wm;
     private View dock;
     private GradientDrawable barBg;
+    private GridBackgroundDrawable gridPhotoBackground;
+    private long gridPhotoModified;
+    private String gridPhotoConfig;
     private LinearLayout shortcutRow;
     private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
+    private MonthCalendarView dateCalendarView;
+    private TextView speedLabel;
+    private final Map<String, TextView> effLabels = new LinkedHashMap<>();
     private ImageView weatherIconView, musicArt, carSweep, speedNeedle, speedGauge;
     private TextView musicPh;
     private String prevGear;
@@ -83,6 +99,10 @@ public class OverlayService extends Service {
     private boolean hasVehWidget;
     private boolean gridActive;
     private LinearLayout gridDots;   // 그리드 페이지 표시(헤더)
+    private int gridPage;            // 현재 그리드 페이지 (재구성 시 유지)
+    private EditPanel editPanel;     // 독 위 편집 패널
+    private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
+    private static final int SNAP_EDGE_DP = 50;   // 벽 스냅 발동 범위 (손가락 두께 정도)
 
     /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
     private float speedAngle(int kmh) {
@@ -109,13 +129,27 @@ public class OverlayService extends Service {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private VehicleInfo vehicle;
+    private EfficiencyTracker efficiencyTracker;
     private HandlerThread vehThread;
     private Handler vehHandler;
     private android.view.GestureDetector handleGesture;
-    private java.util.Set<String> homePackages;
-    private String lastFgPkg;
+    private String displayAreaState;
+    private android.database.ContentObserver displayAreaObserver;
+    private android.content.BroadcastReceiver displayAreaReceiver;
+    private android.content.BroadcastReceiver shortcutAddedReceiver;
+    private FrameLayout dockScroll;
+    private int pendingDockScroll = -1;
+    private boolean pendingDockScrollVertical;
+    private String pendingDockScrollMode;
     private String mode = "default";   // 현재 배치 모드: default / home
     private boolean homeFgNow;
+    private final Runnable displayAreaPoll = new Runnable() {
+        @Override
+        public void run() {
+            refreshDisplayAreaState();
+            ui.postDelayed(this, DISPLAY_AREA_POLL_MS);
+        }
+    };
 
     /** 현재 모드의 pref 키 (home 모드는 _home 접미사) */
     private String mk(String base) {
@@ -133,13 +167,34 @@ public class OverlayService extends Service {
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
             (prefs, key) -> {
                 if (key == null) return;
+                // 위치 저장(x/y)은 이미 updateViewLayout 으로 반영됨 → 재구성 불필요 (전환 시 깜빡/이동 방지)
+                if (KEY_X.equals(key) || KEY_Y.equals(key)
+                        || (KEY_X + "_home").equals(key) || (KEY_Y + "_home").equals(key)) return;
+                if (ShortcutStore.KEY_ALPHA.equals(key)) {   // 투명도는 재구성 없이 즉시 적용
+                    if (dock != null) dock.setAlpha(dockAlpha());
+                    return;
+                }
+                if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
+                if (UpdateManager.isInternalPreference(key)) return;
+                if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
+                if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
+                if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
+                    updateSpeedUnitUi();
+                    return;
+                }
+                if (ShortcutStore.KEY_EFF_WHKM.equals(key)) {
+                    updateEffUnitUi();
+                    return;
+                }
                 if (ShortcutStore.KEY.equals(key)) {
                     if (gridActive) installDock(); else rebuildShortcuts();
                 } else installDock();
             };
 
+    private boolean colonOn = true;   // 시계 콜론 깜빡임 상태
     private final Runnable clockTick = new Runnable() {
         public void run() {
+            colonOn = !colonOn;        // 1초마다 콜론 토글 → 2초 주기 깜빡임
             updateClock();
             ui.postDelayed(this, 1000);
         }
@@ -153,9 +208,15 @@ public class OverlayService extends Service {
     private final Runnable musicTick = new Runnable() {
         public void run() {
             updateMusic();
-            ui.postDelayed(this, 3000);
+            ui.postDelayed(this, 4000);   // 콜백 백업용 느린 폴링
         }
     };
+
+    // 미디어 세션 콜백 (메타데이터 변경 시 즉시 앨범아트 갱신)
+    private android.media.session.MediaSessionManager mediaMgr;
+    private android.media.session.MediaController mediaMc;
+    private android.media.session.MediaController.Callback mediaCb;
+    private android.media.session.MediaSessionManager.OnActiveSessionsChangedListener mediaSessions;
     private final Runnable hazardTick = new Runnable() {
         public void run() {
             if (lampDots == null || !"P".equals(prevGear)) return;
@@ -164,18 +225,16 @@ public class OverlayService extends Service {
             ui.postDelayed(this, 450);
         }
     };
-    private final Runnable fgTick = new Runnable() {
-        public void run() {
-            updateHomeMode();
-            ui.postDelayed(this, 1200);
-        }
-    };
-
     @Override
     public void onCreate() {
         super.onCreate();
         isRunning = true;
         sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
+        // 편집 중 강제한 모드가 전원 종료로 남아도 다음 실행은 실제 화면을 따라간다.
+        sp.edit()
+                .putBoolean(ShortcutStore.KEY_HOME_PROFILE, true)
+                .putString(ShortcutStore.KEY_EDIT_MODE, "auto")
+                .apply();
         handleGesture = new android.view.GestureDetector(this,
                 new android.view.GestureDetector.SimpleOnGestureListener() {
                     @Override
@@ -196,8 +255,11 @@ public class OverlayService extends Service {
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 android.graphics.PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.windowAnimations = 0;   // 창 전환 애니메이션 끔 (확인용)
         lp.x = sp.getInt(KEY_X, d(24));
         lp.y = sp.getInt(KEY_Y, d(60));
+        startDisplayAreaTracking();
+        startShortcutAddedTracking();
         installDock();
         sp.registerOnSharedPreferenceChangeListener(prefListener);
     }
@@ -227,8 +289,9 @@ public class OverlayService extends Service {
         ui.removeCallbacks(musicTick);
         ui.removeCallbacks(hazardTick);
         stopVehicle();
-        ui.removeCallbacks(fgTick);
+        stopMediaCallbacks();
         vehValues.clear();
+        captureDockScroll();
         mode = activeMode();
         lp.x = sp.getInt(mk(KEY_X), d(24));
         lp.y = sp.getInt(mk(KEY_Y), d(60));
@@ -262,8 +325,12 @@ public class OverlayService extends Service {
         // 그리드: 런처 타일 크기로 강제 (각진 사각 박스), 비율 슬라이더 무시 / 그 외: 둥근 독
         if (grid) {
             float density = getResources().getDisplayMetrics().density;
+            DisplayMetrics gdm = realMetrics();
+            String gridPosition = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
             lp.width = Math.round(GRID_TILE_W_DP * density);
-            lp.height = Math.round(GRID_TILE_H_DP * density);
+            lp.height = "right".equals(gridPosition)
+                    ? Math.max(1, gdm.heightPixels - insetTop() - insetBottom())
+                    : Math.round(GRID_TILE_H_DP * density);
             bar.setPadding(0, 0, 0, 0);
             // 셀 크기에 맞춰 위젯 스케일을 산출 → 슬라이더(SCALE) 대신 타일/격자 기준
             int gc = Math.max(1, Math.min(6, sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID)));
@@ -272,7 +339,17 @@ public class OverlayService extends Service {
             float cell = Math.min(lp.width / (float) gc, gridH / gr);
             float tilePx = cell * 0.82f;                 // 셀 안에 여백을 두고 채움
             SCALE = tilePx / (TILE_DP * density);
-            SCALE = Math.max(0.5f, Math.min(4f, SCALE)); // 과대/과소 방지
+            float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
+            SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
+            // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용
+            lp.x = gdm.widthPixels - lp.width;
+            if ("bottom".equals(gridPosition)) {
+                lp.y = gdm.heightPixels - insetBottom() - lp.height;
+            } else if ("right".equals(gridPosition)) {
+                lp.y = insetTop();
+            } else {
+                lp.y = insetTop();   // 상단은 상태바 아래에 (너무 올라가지 않게)
+            }
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -291,6 +368,9 @@ public class OverlayService extends Service {
             handle.setTextSize(TypedValue.COMPLEX_UNIT_PX, tileSide() * 0.5f);
             handle.setPadding(d(12), d(8), d(12), d(8));
             bar.addView(handle);
+            if (UpdateManager.isUpdateAvailable(this)) {
+                bar.addView(buildUpdateIndicator(false));
+            }
         }
 
         // 위젯을 저장된 순서대로 수집 (켜진 것만)
@@ -302,6 +382,7 @@ public class OverlayService extends Service {
         dustShowPm25 = false;
         ui.removeCallbacks(dustRevert);
         dateWeekday = null;
+        dateCalendarView = null;
         timeView = null;
         musicArt = null;
         musicPh = null;
@@ -309,6 +390,8 @@ public class OverlayService extends Service {
         lampDots = null;
         speedNeedle = null;
         speedGauge = null;
+        speedLabel = null;
+        effLabels.clear();
         batteryBar = null;
         hasVehWidget = false;
         for (String id : ShortcutStore.widgetOrder(this)) {
@@ -322,14 +405,13 @@ public class OverlayService extends Service {
             ui.post(clockTick);
         }
         if (weatherIconView != null || dustView != null) ui.post(envTick);
-        if (musicArt != null) ui.post(musicTick);
-        ui.removeCallbacks(fgTick);
-        if (dock != null) dock.setVisibility(View.VISIBLE);
-        // 홈 프로필 사용 + 자동(편집 아님) + 사용정보 접근 시 포그라운드 따라 모드 전환
-        if (sp.getBoolean(ShortcutStore.KEY_HOME_PROFILE, false)
-                && "auto".equals(sp.getString(ShortcutStore.KEY_EDIT_MODE, "auto"))
-                && hasUsageAccess()) {
-            ui.post(fgTick);
+        if (musicArt != null) {
+            ui.post(musicTick);
+            startMediaCallbacks();   // 즉시 갱신용 콜백 등록
+        }
+        if (dock != null) {
+            dock.setVisibility(View.VISIBLE);
+            dock.setAlpha(dockAlpha());
         }
 
         DisplayMetrics dm = realMetrics();
@@ -348,8 +430,7 @@ public class OverlayService extends Service {
             TextView appName = new TextView(this);
             appName.setText("PolDock");
             appName.setTextColor(0xFFFFFFFF);
-            appName.setTypeface(appName.getTypeface(), android.graphics.Typeface.BOLD);
-            appName.setTextSize(TypedValue.COMPLEX_UNIT_PX, ic * 0.42f);
+            appName.setTextSize(TypedValue.COMPLEX_UNIT_PX, ic * 0.63f);
             appName.setGravity(Gravity.CENTER_VERTICAL);
             appName.setIncludeFontPadding(false);
             appName.setSingleLine(true);
@@ -367,6 +448,13 @@ public class OverlayService extends Service {
             FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(ic, ic, Gravity.END | Gravity.TOP);
             hlp.setMargins(0, m, m, 0);
             header.addView(editBtn, hlp);
+            if (UpdateManager.isUpdateAvailable(this)) {
+                View update = buildUpdateIndicator(true);
+                FrameLayout.LayoutParams ulp = new FrameLayout.LayoutParams(
+                        ic, ic, Gravity.END | Gravity.TOP);
+                ulp.setMargins(0, m, m * 2 + ic, 0);
+                header.addView(update, ulp);
+            }
             // 헤더 가운데: 페이지 표시 점 (여러 페이지일 때만)
             gridDots = null;
             if (pages > 1) {
@@ -426,6 +514,26 @@ public class OverlayService extends Service {
             }
             pager.addView(pagesRow, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            // 재구성(위젯 토글 등) 후에도 보던 페이지 유지 — 그리기 직전에 스크롤 잡아 깜빡임 방지
+            final int restorePage = Math.max(0, Math.min(pages - 1, gridPage));
+            gridPage = restorePage;
+            if (restorePage > 0) pager.setScrollX(restorePage * pageW);
+            pager.getViewTreeObserver().addOnPreDrawListener(
+                    new android.view.ViewTreeObserver.OnPreDrawListener() {
+                        public boolean onPreDraw() {
+                            pager.getViewTreeObserver().removeOnPreDrawListener(this);
+                            pager.scrollTo(restorePage * pageW, 0);
+                            if (gridDots != null) {
+                                for (int i = 0; i < gridDots.getChildCount(); i++) {
+                                    View d = gridDots.getChildAt(i);
+                                    if (d.getBackground() instanceof GradientDrawable)
+                                        ((GradientDrawable) d.getBackground())
+                                                .setColor(i == restorePage ? 0xFFFFFFFF : 0x66FFFFFF);
+                                }
+                            }
+                            return true;
+                        }
+                    });
             // 손 떼면 가장 가까운 페이지로 스냅 + 점 갱신
             if (pages > 1) {
                 pager.setOnTouchListener((v, e) -> {
@@ -450,6 +558,7 @@ public class OverlayService extends Service {
 
             FrameLayout scroll = vertical ? new ScrollView(this) : new HorizontalScrollView(this);
             scroll.addView(content);
+            dockScroll = scroll;
             if (vertical) {
                 ((ScrollView) scroll).setVerticalScrollBarEnabled(false);
                 bar.addView(scroll);
@@ -459,26 +568,93 @@ public class OverlayService extends Service {
                 bar.addView(scroll);
                 capWidth(scroll, dm.widthPixels - insetLeftRight() - d(70));
             }
+            restoreDockScroll(scroll, vertical);
             rebuildShortcuts();
         }
-        if (barBg != null) {
-            if (grid) {
-                // 런처 타일처럼: 불투명 배경(card_background #141516), 테두리 없음, 각진 사각
-                barBg.setColor(0xFF141516);
-                barBg.setStroke(0, 0);
-                barBg.setCornerRadius(0f);
-            } else {
-                barBg.setColor(0xDD111111);
-                barBg.setStroke(d(1), 0x55FFFFFF);
-            }
+        applyDockBackground(bar, grid);
+        // 재구성 직후 측정값으로 '먼저' 클램프 → 전환 시 드롭위치에 그렸다가 화면 안으로 튀는 2-pass 제거
+        if (pendingSnapEdge == null) {
+            DisplayMetrics dmc = realMetrics();
+            int wSpec = lp.width > 0
+                    ? View.MeasureSpec.makeMeasureSpec(lp.width, View.MeasureSpec.EXACTLY)
+                    : View.MeasureSpec.makeMeasureSpec(dmc.widthPixels, View.MeasureSpec.AT_MOST);
+            int hSpec = lp.height > 0
+                    ? View.MeasureSpec.makeMeasureSpec(lp.height, View.MeasureSpec.EXACTLY)
+                    : View.MeasureSpec.makeMeasureSpec(dmc.heightPixels, View.MeasureSpec.AT_MOST);
+            dock.measure(wSpec, hSpec);
+            clampSize(dock.getMeasuredWidth(), dock.getMeasuredHeight());
+            wm.updateViewLayout(dock, lp);
         }
         dock.post(() -> {
             applyDockCorner();
-            clamp();
-            wm.updateViewLayout(dock, lp);
+            if (pendingSnapEdge != null) {
+                String e = pendingSnapEdge;
+                pendingSnapEdge = null;
+                applySnapEdge(e);        // 새 크기 기준으로 벽에 붙임
+            } else {
+                clamp();
+                wm.updateViewLayout(dock, lp);
+            }
         });
 
         if (hasVehWidget) startVehicle();
+    }
+
+    private View buildUpdateIndicator(boolean grid) {
+        ImageView icon = new ImageView(this);
+        icon.setImageDrawable(new UpdateIconDrawable());
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setContentDescription("업데이트 있음");
+        icon.setClickable(true);
+        icon.setOnClickListener(v -> UpdateManager.openUpdatePrompt(this));
+        int padding = grid ? px(8) : d(8);
+        icon.setPadding(padding, padding, padding, padding);
+        if (!grid) {
+            int side = d(48);
+            icon.setLayoutParams(new LinearLayout.LayoutParams(side, side));
+        }
+        return icon;
+    }
+
+    /** 재구성되는 가로/세로 독의 스크롤 위치를 현재 모드 기준으로 보관한다. */
+    private void captureDockScroll() {
+        pendingDockScroll = -1;
+        pendingDockScrollMode = null;
+        if (dockScroll instanceof ScrollView) {
+            pendingDockScroll = ((ScrollView) dockScroll).getScrollY();
+            pendingDockScrollVertical = true;
+            pendingDockScrollMode = mode;
+        } else if (dockScroll instanceof HorizontalScrollView) {
+            pendingDockScroll = ((HorizontalScrollView) dockScroll).getScrollX();
+            pendingDockScrollVertical = false;
+            pendingDockScrollMode = mode;
+        }
+        dockScroll = null;
+    }
+
+    /** 같은 홈/일반 모드와 같은 방향으로 다시 만들 때만 보던 지점으로 되돌린다. */
+    private void restoreDockScroll(final FrameLayout scroll, boolean vertical) {
+        if (pendingDockScroll < 0 || pendingDockScrollVertical != vertical
+                || !mode.equals(pendingDockScrollMode)) return;
+        final int position = pendingDockScroll;
+        pendingDockScroll = -1;
+        pendingDockScrollMode = null;
+        scroll.getViewTreeObserver().addOnPreDrawListener(
+                new android.view.ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        scroll.getViewTreeObserver().removeOnPreDrawListener(this);
+                        applyDockScroll(scroll, vertical, position);
+                        scroll.post(() -> applyDockScroll(scroll, vertical, position));
+                        return true;
+                    }
+                });
+    }
+
+    private void applyDockScroll(FrameLayout scroll, boolean vertical, int position) {
+        if (scroll != dockScroll) return;
+        if (vertical) ((ScrollView) scroll).scrollTo(0, position);
+        else ((HorizontalScrollView) scroll).scrollTo(position, 0);
     }
 
     // ---------------------------------------------------------------- 타일 공통
@@ -502,7 +678,7 @@ public class OverlayService extends Service {
 
     /** 값 글씨: 한 줄 + 길면 자동 축소 (50km 등 줄바꿈 방지) */
     private TextView valueText(int side) {
-        TextView t = tileText(side * 0.36f, TILE_FG, true);
+        TextView t = tileText(side * 0.36f, wFg(), true);
         t.setMaxLines(1);
         if (Build.VERSION.SDK_INT >= 26) {
             int max = Math.round(side * 0.36f);
@@ -529,22 +705,102 @@ public class OverlayService extends Service {
 
     private View buildDateTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        dateWeekday = tileText(side * 0.20f, TILE_LABEL, false);   // 요일 (위, 라벨)
-        dateDay = valueText(side);                                 // 날짜 (아래, 값)
-        box.addView(dateWeekday);
-        box.addView(dateDay);
-        return box;
+        final float radius = side * CalendarTile.CORNER_RATIO;
+        FrameLayout tile = new FrameLayout(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(wBg());
+        bg.setCornerRadius(radius);
+        tile.setBackground(bg);
+        tile.setClipToOutline(true);
+        tile.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+
+        LinearLayout date = new LinearLayout(this);
+        date.setOrientation(LinearLayout.VERTICAL);
+        date.setGravity(Gravity.CENTER);
+        dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
+        dateDay = valueText(side);                              // 날짜 (아래, 값)
+        date.addView(dateWeekday);
+        date.addView(dateDay);
+        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+
+        dateCalendarView = new MonthCalendarView(this);
+        dateCalendarView.setColors(wFg(), wLabel(), Ui.ACCENT);
+        int inset = Math.max(1, Math.round(side * 0.04f));
+        FrameLayout.LayoutParams calendarLp = new FrameLayout.LayoutParams(
+                side - inset * 2, side - inset * 2, Gravity.CENTER);
+        tile.addView(dateCalendarView, calendarLp);
+
+        boolean calendar = sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
+        date.setVisibility(calendar ? View.GONE : View.VISIBLE);
+        dateCalendarView.setVisibility(calendar ? View.VISIBLE : View.GONE);
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> {
+            boolean show = !sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
+            sp.edit().putBoolean(ShortcutStore.KEY_DATE_CALENDAR, show).apply();
+            date.setVisibility(show ? View.GONE : View.VISIBLE);
+            dateCalendarView.setVisibility(show ? View.VISIBLE : View.GONE);
+        });
+
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(side, side);
+        layout.setMargins(d(5), d(3), d(5), d(3));
+        tile.setLayoutParams(layout);
+        return tile;
     }
 
     private View buildTimeTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        timeAmPm = tileText(side * 0.20f, TILE_LABEL, false);   // 오전/오후 (위, 작게)
-        timeView = valueText(side);       // 시각 (아래, 크게)
-        box.addView(timeAmPm);
-        box.addView(timeView);
-        return box;
+        final float radius = side * CalendarTile.CORNER_RATIO;
+
+        FrameLayout tile = new FrameLayout(this);
+        tile.setClipToOutline(true);
+        tile.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(wBg());
+        bg.setCornerRadius(radius);
+        tile.setBackground(bg);
+
+        // 디지털
+        final LinearLayout dig = new LinearLayout(this);
+        dig.setOrientation(LinearLayout.VERTICAL);
+        dig.setGravity(Gravity.CENTER);
+        timeAmPm = tileText(side * 0.20f, wLabel(), false);   // 오전/오후 (위)
+        timeView = valueText(side);                            // 시각 (아래)
+        dig.addView(timeAmPm);
+        dig.addView(timeView);
+        tile.addView(dig, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+
+        // 아날로그
+        final AnalogClockView analog = new AnalogClockView(this);
+        analog.setColors(wFg(), wLabel());
+        int inset = Math.round(side * 0.06f);
+        FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(side, side, Gravity.CENTER);
+        alp.setMargins(inset, inset, inset, inset);
+        tile.addView(analog, alp);
+
+        boolean isAnalog = sp.getBoolean(ShortcutStore.KEY_TIME_ANALOG, false);
+        dig.setVisibility(isAnalog ? View.GONE : View.VISIBLE);
+        analog.setVisibility(isAnalog ? View.VISIBLE : View.GONE);
+
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> {
+            boolean now = !sp.getBoolean(ShortcutStore.KEY_TIME_ANALOG, false);
+            sp.edit().putBoolean(ShortcutStore.KEY_TIME_ANALOG, now).apply();
+            dig.setVisibility(now ? View.GONE : View.VISIBLE);
+            analog.setVisibility(now ? View.VISIBLE : View.GONE);   // 즉시 전환 (재구성 없음)
+        });
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
+        lp.setMargins(d(5), d(3), d(5), d(3));
+        tile.setLayoutParams(lp);
+        return tile;
     }
 
     private void updateClock() {
@@ -552,6 +808,7 @@ public class OverlayService extends Service {
             Date now = new Date();
             dateWeekday.setText(new SimpleDateFormat("E", Locale.getDefault()).format(now));
             dateDay.setText(new SimpleDateFormat("d", Locale.getDefault()).format(now));
+            if (dateCalendarView != null) dateCalendarView.setDate(now);
         }
         if (timeView != null) {
             java.util.Calendar cal = java.util.Calendar.getInstance();
@@ -559,7 +816,13 @@ public class OverlayService extends Service {
             int m = cal.get(java.util.Calendar.MINUTE);
             int hr = h % 12;
             if (hr == 0) hr = 12;
-            timeView.setText(String.format(Locale.US, "%d:%02d", hr, m));
+            String t = String.format(Locale.US, "%d:%02d", hr, m);
+            int ci = t.indexOf(':');
+            android.text.SpannableString ss = new android.text.SpannableString(t);
+            if (!colonOn && ci >= 0)   // 콜론만 투명 처리 → 폭 유지하며 깜빡임
+                ss.setSpan(new android.text.style.ForegroundColorSpan(0x00000000),
+                        ci, ci + 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            timeView.setText(ss);
             if (timeAmPm != null) {
                 timeAmPm.setVisibility(View.VISIBLE);
                 timeAmPm.setText(h < 12 ? "오전" : "오후");
@@ -571,8 +834,8 @@ public class OverlayService extends Service {
 
     private View buildWeatherTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        tempView = tileText(side * 0.24f, TILE_LABEL, false);   // 온도 (°기호 보정으로 살짝 키움)
+        LinearLayout box = tileBox(wBg());
+        tempView = tileText(side * 0.24f, wLabel(), false);   // 온도 (°기호 보정으로 살짝 키움)
         tempView.setText(cacheTemp != null ? cacheTemp : "—");
         box.addView(tempView);
         weatherIconView = new ImageView(this);                  // 그림 (아래)
@@ -584,15 +847,17 @@ public class OverlayService extends Service {
 
     private View buildDustTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
-        dustLabel = tileText(side * 0.20f, TILE_LABEL, false);   // 라벨 (미세/초미세)
+        LinearLayout box = tileBox(wBg());
+        dustLabel = tileText(side * 0.20f, wLabel(), false);   // 라벨 (미세/초미세)
         dustLabel.setText("미세");
         dustView = valueText(side);   // 값 (아래)
         dustView.setText("…");
         box.addView(dustLabel);
         box.addView(dustView);
         box.setClickable(true);
-        box.setOnClickListener(v -> toggleDust());
+        box.setOnClickListener(v -> {
+            toggleDust();
+        });
         renderDustCurrent();
         return box;
     }
@@ -611,7 +876,7 @@ public class OverlayService extends Service {
         if (dustLabel != null) dustLabel.setText(dustShowPm25 ? "초미세" : "미세");
         if (pm < 0) {
             dustView.setText("—");
-            dustView.setTextColor(TILE_FG);
+            dustView.setTextColor(wFg());
             return;
         }
         dustView.setText(String.valueOf(pm));
@@ -633,7 +898,7 @@ public class OverlayService extends Service {
 
     private View buildMusicTile() {
         int side = tileSide();
-        LinearLayout box = tileBox(TILE_BG);
+        LinearLayout box = tileBox(wBg());
         int isz = Math.round(side * 0.86f);
         final float radius = side * CalendarTile.CORNER_RATIO;
 
@@ -658,15 +923,116 @@ public class OverlayService extends Service {
         fl.addView(musicPh, new FrameLayout.LayoutParams(isz, isz));
 
         box.addView(fl, new LinearLayout.LayoutParams(isz, isz));
+        box.setClickable(true);
         box.setOnClickListener(v -> {
-            // 앨범아트 없으면 알림 접근 설정 열기
-            try {
-                startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            } catch (Exception ignored) {
+            if (notifAccessOn()) {
+                mediaNext();   // 권한 있음 → 다음 곡
+            } else {
+                // 권한 없음 → 알림 접근 설정 열기
+                try {
+                    startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception ignored) {
+                }
             }
         });
         return box;
+    }
+
+    /** 알림 접근(미디어 세션 읽기) 허용 여부 */
+    private boolean notifAccessOn() {
+        try {
+            String flat = android.provider.Settings.Secure.getString(
+                    getContentResolver(), "enabled_notification_listeners");
+            return flat != null && flat.contains(getPackageName());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 현재 재생 중인(없으면 아무) 미디어 세션에 다음 곡 명령 */
+    private void mediaNext() {
+        try {
+            android.media.session.MediaSessionManager msm =
+                    (android.media.session.MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
+            java.util.List<android.media.session.MediaController> cs = msm.getActiveSessions(
+                    new android.content.ComponentName(this, NotifListener.class));
+            android.media.session.MediaController target = null;
+            for (android.media.session.MediaController mc : cs) {
+                android.media.session.PlaybackState ps = mc.getPlaybackState();
+                if (ps != null && ps.getState() == android.media.session.PlaybackState.STATE_PLAYING) {
+                    target = mc;
+                    break;
+                }
+                if (target == null) target = mc;
+            }
+            if (target != null) target.getTransportControls().skipToNext();
+            // 앨범아트 갱신은 MediaController.Callback(onMetadataChanged)이 담당
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 활성 미디어 세션에 콜백을 붙여 메타데이터 변경 시 즉시 갱신 */
+    private void startMediaCallbacks() {
+        if (!notifAccessOn()) return;
+        try {
+            mediaMgr = (android.media.session.MediaSessionManager)
+                    getSystemService(MEDIA_SESSION_SERVICE);
+            final android.content.ComponentName cn =
+                    new android.content.ComponentName(this, NotifListener.class);
+            mediaSessions = controllers -> attachMediaController(pickController(controllers));
+            mediaMgr.addOnActiveSessionsChangedListener(mediaSessions, cn);
+            attachMediaController(pickController(mediaMgr.getActiveSessions(cn)));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private android.media.session.MediaController pickController(
+            java.util.List<android.media.session.MediaController> list) {
+        if (list == null) return null;
+        android.media.session.MediaController any = null;
+        for (android.media.session.MediaController mc : list) {
+            android.media.session.PlaybackState ps = mc.getPlaybackState();
+            if (ps != null && ps.getState() == android.media.session.PlaybackState.STATE_PLAYING)
+                return mc;
+            if (any == null) any = mc;
+        }
+        return any;
+    }
+
+    private void attachMediaController(android.media.session.MediaController mc) {
+        if (mc == mediaMc) {
+            updateMusic();
+            return;
+        }
+        if (mediaMc != null && mediaCb != null) {
+            try { mediaMc.unregisterCallback(mediaCb); } catch (Throwable ignored) {}
+        }
+        mediaMc = mc;
+        if (mc == null) {
+            updateMusic();
+            return;
+        }
+        mediaCb = new android.media.session.MediaController.Callback() {
+            @Override public void onMetadataChanged(android.media.MediaMetadata m) { updateMusic(); }
+            @Override public void onPlaybackStateChanged(android.media.session.PlaybackState s) { updateMusic(); }
+            @Override public void onSessionDestroyed() { attachMediaController(null); }
+        };
+        try { mc.registerCallback(mediaCb, ui); } catch (Throwable ignored) {}
+        updateMusic();
+    }
+
+    private void stopMediaCallbacks() {
+        try {
+            if (mediaMgr != null && mediaSessions != null)
+                mediaMgr.removeOnActiveSessionsChangedListener(mediaSessions);
+        } catch (Throwable ignored) {}
+        if (mediaMc != null && mediaCb != null) {
+            try { mediaMc.unregisterCallback(mediaCb); } catch (Throwable ignored) {}
+        }
+        mediaSessions = null;
+        mediaMc = null;
+        mediaCb = null;
     }
 
     private void updateMusic() {
@@ -857,17 +1223,39 @@ public class OverlayService extends Service {
         hasVehWidget = true;
         boolean gear = ShortcutStore.KEY_V_GEAR.equals(key);
         boolean speed = ShortcutStore.KEY_V_SPEED.equals(key);
-        LinearLayout box = tileBox(TILE_BG);
+        boolean eff = isEfficiencyKey(key);
+        LinearLayout box = tileBox(wBg());
         if (gear || speed) box.setBackground(null);   // 배경은 FrameLayout에서 처리
-        TextView lab = tileText(side * 0.20f, TILE_LABEL, false);   // 라벨 (위)
-        lab.setText(label);
+        TextView lab = tileText(side * 0.20f, wLabel(), false);   // 라벨 (위)
+        if (speed || eff) {
+            lab.setText(vehicleUnitLabel(speed, label));
+            lab.setMaxLines(1);
+            if (Build.VERSION.SDK_INT >= 26) {
+                int max = Math.round(side * 0.20f), min = Math.round(side * 0.10f);
+                int step = Math.max(1, Math.round(side * 0.01f));
+                lab.setAutoSizeTextTypeUniformWithConfiguration(min, max, step,
+                        TypedValue.COMPLEX_UNIT_PX);
+            }
+        } else {
+            lab.setText(label);
+        }
         TextView val = valueText(side);   // 값 (아래)
         CharSequence cached = cacheVeh.get(key);
-        val.setText(cached != null ? cached : "—");   // 재생성 시 마지막 값 유지
+        if (speed) val.setText(cached != null ? speedNum(parseIntSafe(cached)) : "—");
+        else if (eff) val.setText(cached != null ? effNum(parseFloatSafe(cached)) : "—");
+        else val.setText(cached != null ? cached : "—");   // 재생성 시 마지막 값 유지
         if (gear && cached != null) val.setTextColor(gearColor(cached.toString()));
-        box.addView(lab);
+        if (eff) {
+            box.setClickable(true);
+            box.setOnClickListener(v -> toggleEffUnit());   // 탭 → km/kWh ↔ Wh/km
+        }
+        // 라벨 폭을 타일 폭에 맞춰 자동 축소가 한 줄로 동작하게
+        box.addView(lab, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         box.addView(val);
         vehValues.put(key, val);
+        if (speed) speedLabel = lab;
+        if (eff) effLabels.put(key, lab);
 
         if (speed) return buildSpeedTile(box, cached);
         if (!gear) return box;
@@ -881,7 +1269,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
         carSweep = new ImageView(this);
         int carRes = getResources().getIdentifier("polestar", "drawable", getPackageName());
         if (carRes != 0) carSweep.setImageResource(carRes);
@@ -914,7 +1302,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
 
         batteryBar = new BatteryBar(this);            // 배경
         batteryBar.setAlpha(0.42f);
@@ -923,9 +1311,9 @@ public class OverlayService extends Service {
         bbp.gravity = Gravity.CENTER;
         tile.addView(batteryBar, bbp);
 
-        LinearLayout box = tileBox(TILE_BG);
+        LinearLayout box = tileBox(wBg());
         box.setBackground(null);
-        TextView lab = tileText(side * 0.20f, TILE_LABEL, false);
+        TextView lab = tileText(side * 0.20f, wLabel(), false);
         lab.setText(label);
         TextView val = valueText(side);
         CharSequence cached = cacheVeh.get(ShortcutStore.KEY_V_BATTERY);
@@ -966,7 +1354,7 @@ public class OverlayService extends Service {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-        tile.setBackgroundColor(TILE_BG);
+        tile.setBackgroundColor(wBg());
         speedGauge = new ImageView(this);                 // 원형 눈금 (고정)
         speedGauge.setImageDrawable(new SpeedGauge());
         speedGauge.setVisibility(View.GONE);
@@ -989,6 +1377,8 @@ public class OverlayService extends Service {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
         lp.setMargins(d(5), d(3), d(5), d(3));
         tile.setLayoutParams(lp);
+        tile.setClickable(true);
+        tile.setOnClickListener(v -> toggleSpeedUnit());   // 탭 → km/h ↔ mph
         return tile;
     }
 
@@ -1014,6 +1404,7 @@ public class OverlayService extends Service {
 
     private void startVehicle() {
         vehicle = new VehicleInfo();
+        efficiencyTracker = new EfficiencyTracker(sp);
         vehThread = new HandlerThread("veh");
         vehThread.start();
         vehHandler = new Handler(vehThread.getLooper());
@@ -1028,7 +1419,8 @@ public class OverlayService extends Service {
                             ui.post(() -> {
                                 updateSpeedNeedle(kmh);
                                 TextView tv = vehValues.get(ShortcutStore.KEY_V_SPEED);
-                                if (tv != null) tv.setText(String.valueOf(Math.round(kmh)));
+                                if (tv != null) tv.setText(speedNum(Math.round(kmh)));
+                                cacheVeh.put(ShortcutStore.KEY_V_SPEED, String.valueOf(Math.round(kmh)));
                             });
                         }
                     }
@@ -1063,8 +1455,15 @@ public class OverlayService extends Service {
                             }
                             prevGear = v;
                         } else if (ShortcutStore.KEY_V_SPEED.equals(e.getKey())) {
-                            cs = v;
-                            updateSpeedNeedle(parseIntSafe(v));
+                            int kmh = parseIntSafe(v);
+                            updateSpeedNeedle(kmh);
+                            cacheVeh.put(e.getKey(), v);              // 원본 km/h 캐시 (바늘/재생성용)
+                            e.getValue().setText(speedNum(kmh));      // 단위 변환해 표시
+                            continue;
+                        } else if (isEfficiencyKey(e.getKey())) {
+                            cacheVeh.put(e.getKey(), v);              // 원본 km/kWh 캐시
+                            e.getValue().setText(effNum(parseFloatSafe(v)));
+                            continue;
                         } else {
                             cs = v;
                         }
@@ -1126,14 +1525,14 @@ public class OverlayService extends Service {
 
     /** 기어 색상: P 검정 · D 다크그린 · R 다크레드 · N 오렌지 */
     private int gearColor(String g) {
-        if (g == null) return TILE_FG;
+        if (g == null) return wFg();
         switch (g) {
-            case "P": return 0xFF1C1C1E;
+            case "P": return wFg();   // 다크 모드에서도 보이게
             case "D": return 0xFF1E7E34;
             case "R": return 0xFFB3261E;
             case "N": return 0xFFE0661A;
         }
-        return TILE_FG;
+        return wFg();
     }
 
     /** 숫자 + 작은 단위 (예: 500 + 작은 km) */
@@ -1143,7 +1542,7 @@ public class OverlayService extends Service {
         sb.append(unit);
         sb.setSpan(new android.text.style.RelativeSizeSpan(0.5f), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
-        sb.setSpan(new android.text.style.ForegroundColorSpan(TILE_LABEL), start, sb.length(),
+        sb.setSpan(new android.text.style.ForegroundColorSpan(wLabel()), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
         return sb;
     }
@@ -1171,37 +1570,34 @@ public class OverlayService extends Service {
             Integer t = vehicle.outsideTemp();
             if (t != null) m.put(ShortcutStore.KEY_V_TEMP, t + "°");
         }
-        // 전비: 속도 적분(거리) + 배터리 Wh 변화(에너지) 누적 → km/kWh
         if (vehValues.containsKey(ShortcutStore.KEY_V_EFF)) {
-            accumulateEff();
-            if (effDist > 0.3f && effEnergy > 0.05f)
-                m.put(ShortcutStore.KEY_V_EFF,
-                        String.format(Locale.US, "%.1f", effDist / effEnergy));
+            efficiencyTracker.sample(
+                    SystemClock.elapsedRealtime(),
+                    vehicle.gear(),
+                    vehicle.speedMps(),
+                    vehicle.chargeRateMilliwatts(),
+                    vehicle.batteryWh(),
+                    vehicle.wheelTicks(),
+                    vehicle.wheelMicrometresPerTick());
+
+            Float efficiency = efficiencyTracker.efficiencyKmPerKwh();
+            if (efficiency == null) {
+                efficiency = efficiencyTracker.calibratedEfficiency(
+                        vehicle.predictedEfficiencyKmPerKwh());
+            }
+            putEfficiency(m, ShortcutStore.KEY_V_EFF, efficiency);
         }
         return m;
     }
 
-    private float effPrevWh = -1f, effDist = 0f, effEnergy = 0f;
-    private long effLastMs = 0L;
-
-    /** 1초마다 호출 (vehThread). 속도로 거리, 배터리 소비로 에너지 누적. */
-    private void accumulateEff() {
-        Float mps = vehicle.speedMps();
-        Float wh = vehicle.batteryWh();
-        long now = System.currentTimeMillis();
-        if (mps != null && wh != null) {
-            if (effLastMs > 0 && effPrevWh > 0) {
-                float dtH = (now - effLastMs) / 3_600_000f;
-                effDist += Math.abs(mps) * 3.6f * dtH;      // km
-                float used = effPrevWh - wh;                 // Wh 소비(양수만)
-                if (used > 0) effEnergy += used / 1000f;     // kWh
-            }
-            effLastMs = now;
-            effPrevWh = wh;
-        }
+    private void putEfficiency(Map<String, String> values, String key, Float efficiency) {
+        String value = efficiency != null && Float.isFinite(efficiency) && efficiency > 0f
+                ? String.format(Locale.US, "%.3f", efficiency) : "";
+        values.put(key, value);
     }
 
     private void stopVehicle() {
+        if (efficiencyTracker != null) efficiencyTracker.persist();
         if (vehHandler != null) {
             vehHandler.removeCallbacksAndMessages(null);
             vehHandler = null;
@@ -1215,6 +1611,7 @@ public class OverlayService extends Service {
             new Thread(v::close).start();
             vehicle = null;
         }
+        efficiencyTracker = null;
     }
 
     // ---------------------------------------------------------------- 바로가기
@@ -1244,10 +1641,10 @@ public class OverlayService extends Service {
             TextView t = new TextView(this);
             t.setText(s.label.isEmpty() ? "?" : s.label);
             t.setGravity(Gravity.CENTER);
-            t.setTextColor(TILE_FG);
+            t.setTextColor(SHORTCUT_FG);
             t.setTextSize(TypedValue.COMPLEX_UNIT_PX, side * 0.30f);
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(TILE_BG);
+            bg.setColor(SHORTCUT_BG);
             bg.setCornerRadius(side * CalendarTile.CORNER_RATIO);
             t.setBackground(bg);
             LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(side, side);
@@ -1280,91 +1677,231 @@ public class OverlayService extends Service {
         Toast.makeText(this, m, Toast.LENGTH_LONG).show();
     }
 
+    /** 독 위에서 바로 편집하는 패널 열기 (별도 설정 화면 없이) */
     private void openApp() {
-        try {
-            Intent i = new Intent(this, MainActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-        } catch (Exception ignored) {
-        }
+        if (editPanel == null) editPanel = new EditPanel(this);
+        editPanel.show();
     }
 
-    // ---------------------------------------------------------------- 홈(런처)에서만 표시
+    private void openAppAtBottom() {
+        if (editPanel == null) editPanel = new EditPanel(this);
+        editPanel.showAtBottom();
+    }
 
-    private java.util.Set<String> homePackages() {
-        if (homePackages != null) return homePackages;
-        java.util.Set<String> s = new java.util.HashSet<>();
-        s.add("com.ecarx.car.launcher");
-        s.add("com.android.car.carlauncher");
+    // ---------------------------------------------------------------- 홈(런처) 상태
+
+    /** ECARX SystemUI가 기록하는 현재 디스플레이 영역 상태를 읽는다. */
+    private String readDisplayAreaState() {
         try {
-            Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
-            for (android.content.pm.ResolveInfo ri :
-                    getPackageManager().queryIntentActivities(home, 0)) {
-                if (ri.activityInfo != null) s.add(ri.activityInfo.packageName);
-            }
+            return android.provider.Settings.Global.getString(
+                    getContentResolver(), ECARX_DISPLAY_AREA_STATE);
         } catch (Throwable ignored) {
-        }
-        homePackages = s;
-        return s;
-    }
-
-    boolean hasUsageAccess() {
-        try {
-            android.app.AppOpsManager ao =
-                    (android.app.AppOpsManager) getSystemService(APP_OPS_SERVICE);
-            int mode = ao.checkOpNoThrow("android:get_usage_stats",
-                    android.os.Process.myUid(), getPackageName());
-            return mode == android.app.AppOpsManager.MODE_ALLOWED;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    private String foregroundPackage() {
-        try {
-            android.app.usage.UsageStatsManager usm =
-                    (android.app.usage.UsageStatsManager) getSystemService(USAGE_STATS_SERVICE);
-            long now = System.currentTimeMillis();
-            android.app.usage.UsageEvents ev = usm.queryEvents(now - 10000, now);
-            android.app.usage.UsageEvents.Event e = new android.app.usage.UsageEvents.Event();
-            String top = null;
-            while (ev.hasNextEvent()) {
-                ev.getNextEvent(e);
-                int t = e.getEventType();
-                if (t == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND
-                        || t == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
-                    top = e.getPackageName();
-                }
-            }
-            return top;
-        } catch (Throwable t) {
             return null;
         }
     }
 
+    private boolean isDisplayAreaHome(String state) {
+        return "Home".equals(state)
+                || "HOME_RATIO_3".equals(state);
+    }
+
+    private void refreshDisplayAreaState() {
+        String state = readDisplayAreaState();
+        // SystemUI가 준비되는 동안 null이 잠시 반환돼도 마지막 유효 상태는 유지한다.
+        if (state != null) displayAreaState = state;
+        updateHomeMode();
+    }
+
+    /** Settings 변경과 SystemUI 브로드캐스트를 함께 감시해 상태 전환을 즉시 반영한다. */
+    private void startDisplayAreaTracking() {
+        // 첫 설치 전에 현재 상태를 반영한다. 이 시점에는 아직 독 뷰가 없으므로 재구성하지 않는다.
+        displayAreaState = readDisplayAreaState();
+        homeFgNow = isDisplayAreaHome(displayAreaState);
+
+        displayAreaObserver = new android.database.ContentObserver(ui) {
+            @Override
+            public void onChange(boolean selfChange) {
+                refreshDisplayAreaState();
+            }
+        };
+        try {
+            getContentResolver().registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(ECARX_DISPLAY_AREA_STATE),
+                    false, displayAreaObserver);
+        } catch (Throwable ignored) {
+        }
+
+        displayAreaReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || !ECARX_DISPLAY_AREA_UPDATE.equals(intent.getAction())) return;
+                String state = intent.getStringExtra(ECARX_DISPLAY_AREA_EXTRA_STATE);
+                displayAreaState = state != null ? state : readDisplayAreaState();
+                updateHomeMode();
+            }
+        };
+        try {
+            registerReceiver(displayAreaReceiver,
+                    new android.content.IntentFilter(ECARX_DISPLAY_AREA_UPDATE));
+        } catch (Throwable ignored) {
+        }
+
+        // 부팅 직후에는 Settings 값/브로드캐스트 등록보다 런처 준비가 늦을 수 있다.
+        ui.removeCallbacks(displayAreaPoll);
+        ui.postDelayed(displayAreaPoll, 500L);
+    }
+
+    private void stopDisplayAreaTracking() {
+        ui.removeCallbacks(displayAreaPoll);
+        if (displayAreaObserver != null) {
+            try {
+                getContentResolver().unregisterContentObserver(displayAreaObserver);
+            } catch (Throwable ignored) {
+            }
+            displayAreaObserver = null;
+        }
+        if (displayAreaReceiver != null) {
+            try {
+                unregisterReceiver(displayAreaReceiver);
+            } catch (Throwable ignored) {
+            }
+            displayAreaReceiver = null;
+        }
+    }
+
+    /** 앱 선택 화면을 닫은 뒤에만 인-독 편집 패널을 다시 연다. */
+    private void startShortcutAddedTracking() {
+        shortcutAddedReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (ACTION_GRID_BACKGROUND_CHANGED.equals(action)) {
+                    gridPhotoBackground = null;
+                    gridPhotoModified = 0L;
+                    gridPhotoConfig = null;
+                    ui.postDelayed(() -> {
+                        if (!isRunning) return;
+                        if (editPanel != null) editPanel.restoreAfterPhotoPicker();
+                        else openApp();
+                    }, 180);
+                    return;
+                }
+                if (!ACTION_SHORTCUT_ADDED.equals(action)) return;
+                ui.postDelayed(() -> {
+                    if (isRunning) openAppAtBottom();
+                }, 180);
+            }
+        };
+        try {
+            android.content.IntentFilter filter =
+                    new android.content.IntentFilter(ACTION_SHORTCUT_ADDED);
+            filter.addAction(ACTION_GRID_BACKGROUND_CHANGED);
+            registerReceiver(shortcutAddedReceiver, filter);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void stopShortcutAddedTracking() {
+        if (shortcutAddedReceiver == null) return;
+        try {
+            unregisterReceiver(shortcutAddedReceiver);
+        } catch (Throwable ignored) {
+        }
+        shortcutAddedReceiver = null;
+    }
+
     private void updateHomeMode() {
-        String top = foregroundPackage();
-        if (top != null) lastFgPkg = top;
-        homeFgNow = lastFgPkg != null && homePackages().contains(lastFgPkg);
+        homeFgNow = isDisplayAreaHome(displayAreaState);
         String want = activeMode();
-        if (!want.equals(mode)) installDock();   // 모드 바뀌면 그 모드의 배치로 재구성
+        if (!want.equals(mode)) {
+            // 그리드 상태에서 홈을 벗어나면: 세로형 + 우측 센터로 전환
+            boolean leavingHomeFromGrid = "home".equals(mode) && "default".equals(want) && gridActive;
+            installDock();   // 모드 바뀌면 그 모드의 배치로 재구성 (mode=want로 갱신됨)
+            if (leavingHomeFromGrid) {
+                if (!"v".equals(sp.getString(mk(KEY_ORI), "h")))
+                    sp.edit().putString(mk(KEY_ORI), "v").apply();   // default 배치=세로
+                moveToRightCenter();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 위치 제한
 
     private void clamp() {
         if (dock == null) return;
+        clampSize(dock.getWidth(), dock.getHeight());
+    }
+
+    private void clampSize(int dockW, int dockH) {
+        if (dock == null) return;
         DisplayMetrics dm = realMetrics();
-        int dockW = dock.getWidth(), dockH = dock.getHeight();
-        int minX = d(2), minY = insetTop();
-        int maxX = dm.widthPixels - dockW - d(2);
-        int maxY = dm.heightPixels - insetBottom() - dockH - d(2);
+        int m = gridActive ? 0 : d(2);   // 그리드는 좌우/하단 벽에 딱 붙게 여백 0
+        int minX = m, minY = insetTop();   // 상단은 상태바 아래 유지
+        int maxX = dm.widthPixels - dockW - m;
+        int maxY = dm.heightPixels - insetBottom() - dockH - m;
         if (maxX < minX) maxX = minX;
         if (maxY < minY) maxY = minY;
         if (lp.x < minX) lp.x = minX;
         if (lp.x > maxX) lp.x = maxX;
         if (lp.y < minY) lp.y = minY;
         if (lp.y > maxY) lp.y = maxY;
+    }
+
+    // ---------------------------------------------------------------- 드래그 스냅(자석 배치)
+
+    /** 손을 뗀 위치에 따라 배치(가로/세로/그리드)를 바꾸고 벽/타일에 붙인다. */
+    /** 손 뗀 뒤 스냅 (그리드 타일에만). */
+    private void snapAfterDrag() {
+        applySnapFromPosition();
+    }
+
+    /**
+     * 현재 독 위치로 배치/스냅 판정.
+     * @param onlyOriChange true면 '배치가 실제로 바뀌는 경우(그리드 포함)'에만 발동 (드래그 중 실시간용).
+     * @return 무언가 적용되면 true.
+     */
+    /**
+     * 손 뗀 위치로 판정.
+     * - 홈 런처 최우측 타일 헤더 → 그리드로 '위치 스냅'(타일에 붙임).
+     * - 상단 밴드 → 가로, 좌측 밴드 → 세로로 '자동 전환'하되 위치는 제자리 피벗(벽 스냅 없음).
+     * - 그 외 → 전환/스냅 없이 위치만 저장.
+     */
+    private void applySnapFromPosition() {
+        if (dock == null) return;
+        // 드래그는 위치 이동만 — 자동 전환/스냅 없음. 배치 전환은 편집 패널에서만.
+        sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+    }
+
+    /** 현재 크기 기준으로 지정한 벽/타일에 붙이고 위치 저장. */
+    private void applySnapEdge(String edge) {
+        if (dock == null || edge == null) return;
+        DisplayMetrics dm = realMetrics();
+        int sw = dm.widthPixels, sh = dm.heightPixels;
+        int w = dock.getWidth(), h = dock.getHeight();
+        int it = insetTop(), ib = insetBottom();
+        switch (edge) {
+            case "gridTop":    lp.x = sw - w - d(4); lp.y = it + d(4); break;
+            case "gridRight":  lp.x = sw - w - d(4); lp.y = it + (sh - it - ib - h) / 2; break;
+            case "gridBottom": lp.x = sw - w - d(4); lp.y = sh - ib - h - d(4); break;
+        }
+        clamp();
+        wm.updateViewLayout(dock, lp);
+        sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+    }
+
+    /** 세로형으로 화면 우측 세로 중앙에 배치. */
+    private void moveToRightCenter() {
+        if (dock == null) return;
+        dock.post(() -> {
+            DisplayMetrics dm = realMetrics();
+            int w = dock.getWidth(), h = dock.getHeight();
+            lp.x = dm.widthPixels - w - d(4);
+            lp.y = (dm.heightPixels - h) / 2;
+            clamp();
+            wm.updateViewLayout(dock, lp);
+            sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+        });
     }
 
     private int insetTop() {
@@ -1441,15 +1978,18 @@ public class OverlayService extends Service {
                     touchY = e.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
+                    if (gridActive) return true;   // 그리드는 위치 고정 (드래그 불가)
+                    // 드래그 중엔 손가락만 따라감
                     lp.x = startX + (int) (e.getRawX() - touchX);
                     lp.y = startY + (int) (e.getRawY() - touchY);
                     clamp();
                     wm.updateViewLayout(dock, lp);
                     return true;
                 case MotionEvent.ACTION_UP:
+                    if (gridActive) return true;   // 그리드는 위치 저장 안 함
                     clamp();
                     wm.updateViewLayout(dock, lp);
-                    sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
+                    snapAfterDrag();   // 위치 저장
                     return true;
             }
             return false;
@@ -1482,6 +2022,158 @@ public class OverlayService extends Service {
         return Math.round(dp * getResources().getDisplayMetrics().density);
     }
 
+    // 위젯 타일 색 (다크 모드 토글) — 바로가기는 제외
+    private boolean darkW() {
+        return sp.getBoolean(ShortcutStore.KEY_DARK, false);
+    }
+
+    private int wBg() {
+        return darkW() ? 0xFF2A2B2E : 0xFFFFFFFF;
+    }
+
+    private int wFg() {
+        return darkW() ? 0xFFF2F3F5 : 0xFF1C1C1E;
+    }
+
+    private int wLabel() {
+        return darkW() ? 0xFFB5BAC2 : 0xFF4E5157;
+    }
+
+    // 속도 단위 (km/h ↔ mph)
+    private boolean speedMph() {
+        return sp.getBoolean(ShortcutStore.KEY_SPEED_MPH, false);
+    }
+
+    private String speedUnit() {
+        return speedMph() ? "mph" : "km/h";
+    }
+
+    private CharSequence vehicleUnitLabel(boolean speed, String efficiencyName) {
+        String name = speed ? "속도" : efficiencyName;
+        String unit = speed ? speedUnit() : effUnit();
+        android.text.SpannableString text = new android.text.SpannableString(name + unit);
+        text.setSpan(new android.text.style.RelativeSizeSpan(0.62f), name.length(), text.length(),
+                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return text;
+    }
+
+    /** 속도 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
+    private void updateSpeedUnitUi() {
+        if (speedLabel != null) speedLabel.setText(vehicleUnitLabel(true, ""));
+        TextView value = vehValues.get(ShortcutStore.KEY_V_SPEED);
+        CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_SPEED);
+        if (value != null && raw != null) value.setText(speedNum(parseIntSafe(raw)));
+    }
+
+    /** km/h 정수를 현재 단위 문자열로 변환 */
+    private String speedNum(int kmh) {
+        if (kmh < 0) return "—";
+        return String.valueOf(speedMph() ? Math.round(kmh * 0.621371f) : kmh);
+    }
+
+    private void toggleSpeedUnit() {
+        sp.edit().putBoolean(ShortcutStore.KEY_SPEED_MPH, !speedMph()).apply();
+    }
+
+    // 전비 단위 (km/kWh ↔ Wh/km)
+    private boolean effWhkm() {
+        return sp.getBoolean(ShortcutStore.KEY_EFF_WHKM, false);
+    }
+
+    private String effUnit() {
+        return effWhkm() ? "kWh/100km" : "km/kWh";
+    }
+
+    /** 전비 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
+    private void updateEffUnitUi() {
+        for (Map.Entry<String, TextView> entry : effLabels.entrySet()) {
+            entry.getValue().setText(vehicleUnitLabel(false, efficiencyName(entry.getKey())));
+            TextView value = vehValues.get(entry.getKey());
+            CharSequence raw = cacheVeh.get(entry.getKey());
+            if (value != null && raw != null) value.setText(effNum(parseFloatSafe(raw)));
+        }
+    }
+
+    private boolean isEfficiencyKey(String key) {
+        return ShortcutStore.KEY_V_EFF.equals(key);
+    }
+
+    private String efficiencyName(String key) {
+        return "전비";
+    }
+
+    /** km/kWh 실수를 현재 단위 문자열로 */
+    private String effNum(float kmPerKwh) {
+        if (kmPerKwh <= 0) return "—";
+        return effWhkm()
+                ? String.format(java.util.Locale.US, "%.1f", 100f / kmPerKwh)  // kWh/100km
+                : String.format(java.util.Locale.US, "%.1f", kmPerKwh);
+    }
+
+    private float parseFloatSafe(CharSequence s) {
+        if (s == null) return -1f;
+        try {
+            return Float.parseFloat(s.toString().trim());
+        } catch (Exception e) {
+            return -1f;
+        }
+    }
+
+    private void toggleEffUnit() {
+        sp.edit().putBoolean(ShortcutStore.KEY_EFF_WHKM, !effWhkm()).apply();
+    }
+
+    private void applyDockBackground(LinearLayout bar, boolean grid) {
+        if (!grid) {
+            barBg.setColor(0xDD111111);
+            barBg.setStroke(d(1), 0x55FFFFFF);
+            bar.setBackground(barBg);
+            return;
+        }
+
+        String backgroundMode = sp.getString(ShortcutStore.KEY_GRID_BG_MODE, "default");
+        if ("photo".equals(backgroundMode)) {
+            java.io.File photo = new java.io.File(getFilesDir(),
+                    GridBackgroundPickerActivity.PHOTO_FILE);
+            long modified = photo.isFile() ? photo.lastModified() : 0L;
+            String sizeMode = sp.getString(ShortcutStore.KEY_GRID_PHOTO_SIZE, "fit");
+            String alignX = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_X, "center");
+            String alignY = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y, "bottom");
+            String backdrop = sp.getString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
+            int color = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                    ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
+            String config = sizeMode + '|' + alignX + '|' + alignY + '|'
+                    + backdrop + '|' + color;
+            if (gridPhotoBackground == null || gridPhotoModified != modified
+                    || !config.equals(gridPhotoConfig)) {
+                gridPhotoBackground = GridBackgroundDrawable.load(photo, sizeMode,
+                        alignX, alignY, backdrop, color);
+                gridPhotoModified = modified;
+                gridPhotoConfig = config;
+            }
+            if (gridPhotoBackground != null) {
+                bar.setBackground(gridPhotoBackground);
+                return;
+            }
+        }
+
+        int color = "color".equals(backgroundMode)
+                ? sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                        ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000
+                : ShortcutStore.DEFAULT_GRID_BG_COLOR;
+        barBg.setColor(color);
+        barBg.setStroke(0, 0);
+        barBg.setCornerRadius(0f);
+        bar.setBackground(barBg);
+    }
+
+    /** 독 불투명도 0.2~1.0 (그리드는 항상 불투명 고정) */
+    private float dockAlpha() {
+        if (gridActive) return 1f;
+        int a = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);
+        return Math.max(20, Math.min(100, a)) / 100f;
+    }
+
     /** 현재 모드/크기에 맞춰 독 코너 반경 적용 (그리드=각진 사각, 그 외=macOS 독 비율) */
     private void applyDockCorner() {
         if (barBg == null || dock == null) return;
@@ -1499,6 +2191,7 @@ public class OverlayService extends Service {
         if (pageW <= 0) return;
         int page = Math.round(pager.getScrollX() / (float) pageW);
         page = Math.max(0, Math.min(pages - 1, page));
+        gridPage = page;   // 재구성 후 유지용
         pager.smoothScrollTo(page * pageW, 0);
         if (gridDots != null) {
             for (int i = 0; i < gridDots.getChildCount(); i++) {
@@ -1520,8 +2213,11 @@ public class OverlayService extends Service {
         ui.removeCallbacks(musicTick);
         ui.removeCallbacks(hazardTick);
         stopVehicle();
-        ui.removeCallbacks(fgTick);
+        stopMediaCallbacks();
+        stopDisplayAreaTracking();
+        stopShortcutAddedTracking();
         if (sp != null) sp.unregisterOnSharedPreferenceChangeListener(prefListener);
+        if (editPanel != null) editPanel.hide();
         if (wm != null && dock != null) {
             try {
                 wm.removeView(dock);
@@ -1538,5 +2234,18 @@ public class OverlayService extends Service {
     static boolean canOverlay(Context ctx) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
         return android.provider.Settings.canDrawOverlays(ctx);
+    }
+
+    /** 중지된 독도 차량 런처에서 다시 누르면 확실히 되살린다. */
+    static void start(Context ctx) {
+        Intent intent = new Intent(ctx, OverlayService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(intent);
+            } else {
+                ctx.startService(intent);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 }

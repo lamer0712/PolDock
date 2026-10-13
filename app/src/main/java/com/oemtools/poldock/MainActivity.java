@@ -1,4 +1,4 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -90,8 +90,7 @@ public class MainActivity extends Activity {
         // 홈(런처) 전용 배치
         c.addView(Ui.sectionLabel(this, "홈 화면 연동"));
         homeProfBtn = Ui.button(this, "홈 전용 배치", Ui.GREY, v -> toggleHomeProfile());
-        c.addView(Ui.rowGap(this, homeProfBtn,
-                Ui.button(this, "사용정보 접근", Ui.GREY, v -> openUsageAccess())));
+        c.addView(homeProfBtn);
         editDefBtn = Ui.button(this, "일반 편집", Ui.GREY, v -> setEditMode("default"));
         editHomeBtn = Ui.button(this, "홈 편집", Ui.GREY, v -> setEditMode("home"));
         c.addView(Ui.rowGap(this, editDefBtn, editHomeBtn));
@@ -107,7 +106,7 @@ public class MainActivity extends Activity {
 
         TextView hnote = new TextView(this);
         hnote.setText("홈 전용 배치: OEM 런처 화면에선 '홈' 배치, 다른 앱 위에선 '일반' 배치로 자동 전환. "
-                + "각 모드는 [편집] 선택 후 독을 드래그·크기조절해 맞추세요. (사용정보 접근 필요)");
+                + "각 모드는 [편집] 선택 후 독을 드래그·크기조절해 맞추세요.");
         hnote.setTextColor(Ui.DIM);
         hnote.setTextSize(11);
         hnote.setPadding(Ui.dp(this, 2), Ui.dp(this, 8), 0, 0);
@@ -147,18 +146,6 @@ public class MainActivity extends Activity {
         status.setText(("home".equals(m) ? "홈" : "일반") + " 배치 편집 중 · 독을 드래그·크기조절하세요");
     }
 
-    private void openUsageAccess() {
-        try {
-            startActivity(new Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        } catch (Exception e) {
-            try {
-                startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
     private void refreshDockControls() {
         boolean hp = prefs().getBoolean(ShortcutStore.KEY_HOME_PROFILE, false);
         String em = prefs().getString(ShortcutStore.KEY_EDIT_MODE, "auto");
@@ -196,7 +183,7 @@ public class MainActivity extends Activity {
                 status.setText("오버레이 권한이 없습니다. 앱을 재설치하면 자동 부여됩니다.");
                 return;
             }
-            startService(new Intent(this, OverlayService.class));
+            OverlayService.start(this);
             status.setText("독을 띄웠습니다 · 손잡이(≡)로 이동, 아이콘 탭으로 실행");
             dockBtn.postDelayed(this::updateDockBtn, 200);
         }

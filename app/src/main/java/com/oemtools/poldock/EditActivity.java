@@ -1,4 +1,4 @@
-package com.oemtools.mirrorfold;
+package com.oemtools.poldock;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -90,6 +90,7 @@ public class EditActivity extends Activity {
     }
 
     private void save() {
+        Shortcut previous = current();
         Shortcut s = new Shortcut();
         s.label = t(label);
         s.action = t(action);
@@ -99,6 +100,10 @@ public class EditActivity extends Activity {
         s.extraValue = t(extraValue);
         s.extraType = "i".equalsIgnoreCase(t(extraType)) ? "i" : "s";
         s.pkg = t(pkg);
+        if (previous != null && previous.pkg.equals(s.pkg)
+                && previous.action.equals(s.action)) {
+            s.component = previous.component;
+        }
         s.iconPkg = t(iconPkg);
         s.iconRes = t(iconRes);
         if (s.label.isEmpty()) s.label = s.action.isEmpty() ? "(이름없음)" : s.action;
