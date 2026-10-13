@@ -37,6 +37,11 @@ public class AppPickerActivity extends Activity {
             "android.media.browse.MediaBrowserService";
     private static final String MEDIA_TEMPLATE = "android.car.intent.action.MEDIA_TEMPLATE";
     private static final String MEDIA_COMPONENT = "android.car.intent.extra.MEDIA_COMPONENT";
+    private static final String SETTINGS_PACKAGE = "com.android.car.settings";
+    private static final String SETTINGS_ACTIVITY =
+            "ecarx.settings.ui.activity.CarSettingsTabActivity";
+    private static final String SECONDARY_SETTINGS_ACTIVITY =
+            "ecarx.settings.ui.activity.CarSettingSecondaryModuleActivity";
 
     // com.ecarx.car.launcher 2.21.2의 app-grid 제외 목록.
     private static final Set<String> OEM_IGNORED_PACKAGES = new HashSet<>(Arrays.asList(
@@ -77,14 +82,23 @@ public class AppPickerActivity extends Activity {
         final String component;
         final Drawable icon;
         final boolean mediaService;
+        final String action;
+        final String shortcutIconRes;
 
         AppCandidate(String name, String pkg, String component, Drawable icon,
                      boolean mediaService) {
+            this(name, pkg, component, icon, mediaService, "", "");
+        }
+
+        AppCandidate(String name, String pkg, String component, Drawable icon,
+                     boolean mediaService, String action, String shortcutIconRes) {
             this.name = name;
             this.pkg = pkg;
             this.component = component;
             this.icon = icon;
             this.mediaService = mediaService;
+            this.action = action;
+            this.shortcutIconRes = shortcutIconRes;
         }
     }
 
@@ -145,6 +159,19 @@ public class AppPickerActivity extends Activity {
                     ri.loadIcon(pm), true));
         }
 
+        addSettingsCandidate(result, pm, "조정", SETTINGS_ACTIVITY,
+                "android.settings.INTERIOR_ADJUSTMENT", "ic_quick_adjustments_48");
+        addSettingsCandidate(result, pm, "모드", SECONDARY_SETTINGS_ACTIVITY,
+                "ecarx.intent.action.SECONDARY_SETTINGS", "ic_quick_car_back_48");
+        addSettingsCandidate(result, pm, "블루투스", SETTINGS_ACTIVITY,
+                "android.settings.BLUETOOTH_SETTINGS", "ic_fav_bluetooth_48");
+        addSettingsCandidate(result, pm, "Wi-Fi", SETTINGS_ACTIVITY,
+                "android.settings.WIFI_SETTINGS", "ic_fav_wifi_general_48");
+        addSettingsCandidate(result, pm, "실내등", SETTINGS_ACTIVITY,
+                "android.settings.INTERIOR_LIGHT", "ic_fav_interior_lights_48");
+        addSettingsCandidate(result, pm, "외부 조명", SETTINGS_ACTIVITY,
+                "android.settings.EXTERIOR_LIGHT", "ic_fav_exterior_lights_blades_48");
+
         Collections.sort(result, (x, y) -> x.name.compareToIgnoreCase(y.name));
         return result;
     }
@@ -180,6 +207,29 @@ public class AppPickerActivity extends Activity {
         } catch (Throwable ignored) {
         }
         return false;
+    }
+
+    private void addSettingsCandidate(List<AppCandidate> result, PackageManager pm,
+                                      String name, String activity, String action,
+                                      String iconRes) {
+        ComponentName component = new ComponentName(SETTINGS_PACKAGE, activity);
+        try {
+            pm.getActivityInfo(component, 0);
+            result.add(new AppCandidate(name, SETTINGS_PACKAGE,
+                    component.flattenToString(), packageDrawable(SETTINGS_PACKAGE, iconRes),
+                    false, action, iconRes));
+        } catch (PackageManager.NameNotFoundException ignored) {
+        }
+    }
+
+    private Drawable packageDrawable(String pkg, String name) {
+        try {
+            android.content.Context packageContext = createPackageContext(pkg, 0);
+            int id = packageContext.getResources().getIdentifier(name, "drawable", pkg);
+            if (id != 0) return packageContext.getResources().getDrawable(id, null);
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private View appRow(AppCandidate app) {
@@ -220,6 +270,12 @@ public class AppPickerActivity extends Activity {
             s = new Shortcut(app.name, MEDIA_TEMPLATE, "", MEDIA_COMPONENT,
                     app.component, "s", "");
             s.iconPkg = app.pkg;
+        } else if (!TextUtils.isEmpty(app.action)) {
+            s = new Shortcut(app.name, app.action, "", "PARAM",
+                    "INTENT_SETTINGS", "s", app.pkg);
+            s.component = app.component;
+            s.iconPkg = SETTINGS_PACKAGE;
+            s.iconRes = app.shortcutIconRes;
         } else {
             s = new Shortcut(app.name, "", "", "", "", "s", app.pkg);
             s.component = app.component;

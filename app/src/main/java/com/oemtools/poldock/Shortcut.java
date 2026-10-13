@@ -102,6 +102,8 @@ public class Shortcut {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         } else {
             i = new Intent(TextUtils.isEmpty(action) ? Intent.ACTION_MAIN : action);
+            ComponentName target = ComponentName.unflattenFromString(component);
+            if (target != null) i.setComponent(target);
             if (!TextUtils.isEmpty(category)) i.addCategory(category);
             if (!TextUtils.isEmpty(data)) i.setData(Uri.parse(data));
             if (!TextUtils.isEmpty(pkg)) i.setPackage(pkg);

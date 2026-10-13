@@ -1675,8 +1675,7 @@ public class OverlayService extends Service {
 
     private boolean isDisplayAreaHome(String state) {
         return "Home".equals(state)
-                || "HOME_RATIO_3".equals(state)
-                || "MapFull".equals(state);
+                || "HOME_RATIO_3".equals(state);
     }
 
     private void refreshDisplayAreaState() {
