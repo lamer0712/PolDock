@@ -427,8 +427,15 @@ public class OverlayService extends Service {
             int ic = px(CARD_ICON_DP), m = px(CARD_ICON_MARGIN_DP);
             FrameLayout header = new FrameLayout(this);
             int headerBase = ShortcutStore.DEFAULT_GRID_BG_COLOR;
-            header.setBackgroundColor(Color.argb(102, Color.red(headerBase),
-                    Color.green(headerBase), Color.blue(headerBase)));
+            GradientDrawable headerBackground = new GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{
+                            Color.argb(51, Color.red(headerBase), Color.green(headerBase),
+                                    Color.blue(headerBase)),
+                            Color.argb(0, Color.red(headerBase), Color.green(headerBase),
+                                    Color.blue(headerBase))
+                    });
+            header.setBackground(headerBackground);
             header.setOnTouchListener(new DragHandle());   // 헤더 드래그로 독 이동
             TextView appName = new TextView(this);
             appName.setText("PolDock");
