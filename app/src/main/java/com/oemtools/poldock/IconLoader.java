@@ -1,6 +1,7 @@
 package com.oemtools.poldock;
 
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -20,7 +21,8 @@ public class IconLoader {
     private static final HashMap<String, Drawable> cache = new HashMap<>();
 
     static Drawable load(Context ctx, Shortcut s) {
-        String ck = s.iconPkg + "/" + s.iconRes + "/" + s.pkg + "/" + s.action + s.extraValue;
+        String ck = s.iconPkg + "/" + s.iconRes + "/" + s.pkg + "/" + s.component
+                + "/" + s.action + s.extraValue;
         Drawable c = cache.get(ck);
         if (c != null) return c;
         Drawable d = resolve(ctx, s);
@@ -39,14 +41,22 @@ public class IconLoader {
             }
         }
         PackageManager pm = ctx.getPackageManager();
-        // 2) 앱 아이콘
+        // 2) 선택한 런처 액티비티 아이콘
+        ComponentName component = ComponentName.unflattenFromString(s.component);
+        if (component != null) {
+            try {
+                return pm.getActivityIcon(component);
+            } catch (Throwable ignored) {
+            }
+        }
+        // 3) 앱 아이콘
         if (!TextUtils.isEmpty(s.pkg)) {
             try {
                 return pm.getApplicationIcon(s.pkg);
             } catch (Throwable ignored) {
             }
         }
-        // 3) 인텐트 대상 아이콘
+        // 4) 인텐트 대상 아이콘
         try {
             Intent i = s.toIntent(ctx);
             if (i != null) {

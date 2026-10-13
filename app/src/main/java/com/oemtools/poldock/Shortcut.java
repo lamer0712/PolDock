@@ -1,6 +1,7 @@
 package com.oemtools.poldock;
 
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.net.Uri;
 import android.text.TextUtils;
@@ -23,6 +24,7 @@ public class Shortcut {
     public String extraValue = "";
     public String extraType = "s";   // "s"=문자열, "i"=정수(10진수 또는 0x..)
     public String pkg = "";
+    public String component = "";    // 선택한 런처 액티비티 (flattenToString)
     public String iconPkg = "";      // OEM 아이콘을 꺼낼 패키지 (예: com.android.car.settings)
     public String iconRes = "";      // 드로어블 리소스 이름 (예: ic_fav_fold_mirror_48)
 
@@ -61,6 +63,7 @@ public class Shortcut {
         o.put("extraValue", extraValue);
         o.put("extraType", extraType);
         o.put("pkg", pkg);
+        o.put("component", component);
         o.put("iconPkg", iconPkg);
         o.put("iconRes", iconRes);
         return o;
@@ -76,6 +79,7 @@ public class Shortcut {
         s.extraValue = o.optString("extraValue");
         s.extraType = o.optString("extraType", "s");
         s.pkg = o.optString("pkg");
+        s.component = o.optString("component");
         s.iconPkg = o.optString("iconPkg");
         s.iconRes = o.optString("iconRes");
         return s;
@@ -86,8 +90,15 @@ public class Shortcut {
         Intent i;
         if (TextUtils.isEmpty(action) && !TextUtils.isEmpty(pkg)) {
             // 앱 런처 실행: 기존 인스턴스 재사용
-            i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
-            if (i == null) return null;
+            ComponentName target = ComponentName.unflattenFromString(component);
+            if (target != null) {
+                i = new Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_LAUNCHER)
+                        .setComponent(target);
+            } else {
+                i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+                if (i == null) return null;
+            }
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         } else {
             i = new Intent(TextUtils.isEmpty(action) ? Intent.ACTION_MAIN : action);
