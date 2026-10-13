@@ -84,10 +84,12 @@ public class OverlayService extends Service {
     private GradientDrawable barBg;
     private GridBackgroundDrawable gridPhotoBackground;
     private long gridPhotoModified;
+    private String gridPhotoConfig;
     private LinearLayout shortcutRow;
     private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
     private MonthCalendarView dateCalendarView;
-    private TextView speedLabel, effLabel;
+    private TextView speedLabel;
+    private final Map<String, TextView> effLabels = new LinkedHashMap<>();
     private ImageView weatherIconView, musicArt, carSweep, speedNeedle, speedGauge;
     private TextView musicPh;
     private String prevGear;
@@ -385,7 +387,7 @@ public class OverlayService extends Service {
         speedNeedle = null;
         speedGauge = null;
         speedLabel = null;
-        effLabel = null;
+        effLabels.clear();
         batteryBar = null;
         hasVehWidget = false;
         for (String id : ShortcutStore.widgetOrder(this)) {
@@ -1194,12 +1196,12 @@ public class OverlayService extends Service {
         hasVehWidget = true;
         boolean gear = ShortcutStore.KEY_V_GEAR.equals(key);
         boolean speed = ShortcutStore.KEY_V_SPEED.equals(key);
-        boolean eff = ShortcutStore.KEY_V_EFF.equals(key);
+        boolean eff = isEfficiencyKey(key);
         LinearLayout box = tileBox(wBg());
         if (gear || speed) box.setBackground(null);   // 배경은 FrameLayout에서 처리
         TextView lab = tileText(side * 0.20f, wLabel(), false);   // 라벨 (위)
         if (speed || eff) {
-            lab.setText(vehicleUnitLabel(speed));
+            lab.setText(vehicleUnitLabel(speed, label));
             lab.setMaxLines(1);
             if (Build.VERSION.SDK_INT >= 26) {
                 int max = Math.round(side * 0.20f), min = Math.round(side * 0.10f);
@@ -1226,7 +1228,7 @@ public class OverlayService extends Service {
         box.addView(val);
         vehValues.put(key, val);
         if (speed) speedLabel = lab;
-        if (eff) effLabel = lab;
+        if (eff) effLabels.put(key, lab);
 
         if (speed) return buildSpeedTile(box, cached);
         if (!gear) return box;
@@ -1431,7 +1433,7 @@ public class OverlayService extends Service {
                             cacheVeh.put(e.getKey(), v);              // 원본 km/h 캐시 (바늘/재생성용)
                             e.getValue().setText(speedNum(kmh));      // 단위 변환해 표시
                             continue;
-                        } else if (ShortcutStore.KEY_V_EFF.equals(e.getKey())) {
+                        } else if (isEfficiencyKey(e.getKey())) {
                             cacheVeh.put(e.getKey(), v);              // 원본 km/kWh 캐시
                             e.getValue().setText(effNum(parseFloatSafe(v)));
                             continue;
@@ -1551,21 +1553,24 @@ public class OverlayService extends Service {
                     vehicle.wheelTicks(),
                     vehicle.wheelMicrometresPerTick());
 
-            Float kwh100km = vehicle.autoTripEfficiencyKwh100km();
-            Float efficiency = kwh100km == null ? null : 100f / kwh100km;
-            if (efficiency == null) efficiency = efficiencyTracker.efficiencyKmPerKwh();
+            Float efficiency = efficiencyTracker.efficiencyKmPerKwh();
             if (efficiency == null) {
                 efficiency = efficiencyTracker.calibratedEfficiency(
                         vehicle.predictedEfficiencyKmPerKwh());
             }
-            if (efficiency != null && Float.isFinite(efficiency) && efficiency > 0f) {
-                m.put(ShortcutStore.KEY_V_EFF, String.format(Locale.US, "%.3f", efficiency));
-            }
+            putEfficiency(m, ShortcutStore.KEY_V_EFF, efficiency);
         }
         return m;
     }
 
+    private void putEfficiency(Map<String, String> values, String key, Float efficiency) {
+        String value = efficiency != null && Float.isFinite(efficiency) && efficiency > 0f
+                ? String.format(Locale.US, "%.3f", efficiency) : "";
+        values.put(key, value);
+    }
+
     private void stopVehicle() {
+        if (efficiencyTracker != null) efficiencyTracker.persist();
         if (vehHandler != null) {
             vehHandler.removeCallbacksAndMessages(null);
             vehHandler = null;
@@ -1748,6 +1753,7 @@ public class OverlayService extends Service {
                 if (ACTION_GRID_BACKGROUND_CHANGED.equals(action)) {
                     gridPhotoBackground = null;
                     gridPhotoModified = 0L;
+                    gridPhotoConfig = null;
                     ui.postDelayed(() -> {
                         if (!isRunning) return;
                         if (editPanel != null) editPanel.restoreAfterPhotoPicker();
@@ -2016,8 +2022,8 @@ public class OverlayService extends Service {
         return speedMph() ? "mph" : "km/h";
     }
 
-    private CharSequence vehicleUnitLabel(boolean speed) {
-        String name = speed ? "속도" : "전비";
+    private CharSequence vehicleUnitLabel(boolean speed, String efficiencyName) {
+        String name = speed ? "속도" : efficiencyName;
         String unit = speed ? speedUnit() : effUnit();
         android.text.SpannableString text = new android.text.SpannableString(name + unit);
         text.setSpan(new android.text.style.RelativeSizeSpan(0.62f), name.length(), text.length(),
@@ -2027,7 +2033,7 @@ public class OverlayService extends Service {
 
     /** 속도 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
     private void updateSpeedUnitUi() {
-        if (speedLabel != null) speedLabel.setText(vehicleUnitLabel(true));
+        if (speedLabel != null) speedLabel.setText(vehicleUnitLabel(true, ""));
         TextView value = vehValues.get(ShortcutStore.KEY_V_SPEED);
         CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_SPEED);
         if (value != null && raw != null) value.setText(speedNum(parseIntSafe(raw)));
@@ -2054,10 +2060,20 @@ public class OverlayService extends Service {
 
     /** 전비 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
     private void updateEffUnitUi() {
-        if (effLabel != null) effLabel.setText(vehicleUnitLabel(false));
-        TextView value = vehValues.get(ShortcutStore.KEY_V_EFF);
-        CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_EFF);
-        if (value != null && raw != null) value.setText(effNum(parseFloatSafe(raw)));
+        for (Map.Entry<String, TextView> entry : effLabels.entrySet()) {
+            entry.getValue().setText(vehicleUnitLabel(false, efficiencyName(entry.getKey())));
+            TextView value = vehValues.get(entry.getKey());
+            CharSequence raw = cacheVeh.get(entry.getKey());
+            if (value != null && raw != null) value.setText(effNum(parseFloatSafe(raw)));
+        }
+    }
+
+    private boolean isEfficiencyKey(String key) {
+        return ShortcutStore.KEY_V_EFF.equals(key);
+    }
+
+    private String efficiencyName(String key) {
+        return "전비";
     }
 
     /** km/kWh 실수를 현재 단위 문자열로 */
@@ -2094,9 +2110,20 @@ public class OverlayService extends Service {
             java.io.File photo = new java.io.File(getFilesDir(),
                     GridBackgroundPickerActivity.PHOTO_FILE);
             long modified = photo.isFile() ? photo.lastModified() : 0L;
-            if (gridPhotoBackground == null || gridPhotoModified != modified) {
-                gridPhotoBackground = GridBackgroundDrawable.load(photo);
+            String sizeMode = sp.getString(ShortcutStore.KEY_GRID_PHOTO_SIZE, "fit");
+            String alignX = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_X, "center");
+            String alignY = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y, "bottom");
+            String backdrop = sp.getString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
+            int color = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                    ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
+            String config = sizeMode + '|' + alignX + '|' + alignY + '|'
+                    + backdrop + '|' + color;
+            if (gridPhotoBackground == null || gridPhotoModified != modified
+                    || !config.equals(gridPhotoConfig)) {
+                gridPhotoBackground = GridBackgroundDrawable.load(photo, sizeMode,
+                        alignX, alignY, backdrop, color);
                 gridPhotoModified = modified;
+                gridPhotoConfig = config;
             }
             if (gridPhotoBackground != null) {
                 bar.setBackground(gridPhotoBackground);

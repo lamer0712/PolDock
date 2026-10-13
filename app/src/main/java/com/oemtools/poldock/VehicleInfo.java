@@ -19,7 +19,6 @@ import java.util.List;
  *   RANGE_REMAINING       291504904 (0x11600308)  CAR_ENERGY            [m]
  *   EV_BATTERY_INSTANTANEOUS_CHARGE_RATE 291504908 (0x1160030C) CAR_ENERGY [mW]
  *   WHEEL_TICK             290521862 (0x11510306)  CAR_SPEED             [ticks]
- *   TRIP_AVG_ENERGY_CONSUMPTION 627077242 (0x2560707A) CAR_VENDOR_EXTENSION [kWh/100km]
  */
 public class VehicleInfo {
 
@@ -31,8 +30,6 @@ public class VehicleInfo {
     public static final int RANGE_REMAINING = 291504904;
     public static final int EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908;
     public static final int WHEEL_TICK = 290521862;
-    public static final int TRIP_AVG_ENERGY_CONSUMPTION = 627077242;
-    private static final int AUTO_TRIP_ZONE = 1;
 
     private Object car;
     private Object cpm;
@@ -83,12 +80,8 @@ public class VehicleInfo {
     }
 
     private Float readFloat(int prop) {
-        return readFloat(prop, 0);
-    }
-
-    private Float readFloat(int prop, int area) {
         try {
-            return (Float) getFloat.invoke(cpm, prop, area);
+            return (Float) getFloat.invoke(cpm, prop, 0);
         } catch (Throwable t) {
             return null;
         }
@@ -206,12 +199,6 @@ public class VehicleInfo {
         if (lvl == null || cap == null || cap <= 0) return null;
         int p = Math.round(lvl / cap * 100f);
         return Math.max(0, Math.min(100, p));
-    }
-
-    /** 자동 트립(zone 1)의 평균 전비 kWh/100km, 못 읽거나 유효하지 않으면 null. */
-    Float autoTripEfficiencyKwh100km() {
-        Float value = readFloat(TRIP_AVG_ENERGY_CONSUMPTION, AUTO_TRIP_ZONE);
-        return value != null && Float.isFinite(value) && value > 0f ? value : null;
     }
 
     void close() {

@@ -2,6 +2,7 @@ package com.oemtools.poldock;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.TextUtils;
@@ -10,6 +11,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -105,6 +107,20 @@ public class Ui {
         return b;
     }
 
+    /** 글자 대신 익숙한 그림을 사용하는 큰 터치 버튼. */
+    static ImageButton iconButton(Context c, Drawable icon, String description,
+                                  int color, View.OnClickListener cl) {
+        ImageButton b = new ImageButton(c);
+        b.setImageDrawable(icon);
+        b.setContentDescription(description);
+        b.setScaleType(ImageButton.ScaleType.CENTER);
+        b.setPadding(dp(c, 12), dp(c, 10), dp(c, 12), dp(c, 10));
+        b.setMinimumHeight(dp(c, 52));
+        b.setBackground(pressable(color, blend(color), dp(c, 14)));
+        b.setOnClickListener(cl);
+        return b;
+    }
+
     static EditText field(Context c, String hint) {
         EditText e = new EditText(c);
         e.setHint(hint);
@@ -141,6 +157,58 @@ public class Ui {
             r.addView(views[i], lp);
         }
         return r;
+    }
+
+    /** 선택 내용이 아래에 이어지는 화면용 탭. */
+    static View tab(Context c, String text, boolean active, View.OnClickListener listener) {
+        LinearLayout item = new LinearLayout(c);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        item.setClickable(true);
+        item.setBackground(pressable(Color.TRANSPARENT, 0x223B82F6, 0));
+        item.setOnClickListener(listener);
+
+        TextView label = new TextView(c);
+        label.setText(text);
+        label.setTextColor(active ? TEXT : DIM);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        label.setTypeface(label.getTypeface(), active
+                ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+        label.setGravity(Gravity.CENTER);
+        label.setPadding(dp(c, 8), dp(c, 12), dp(c, 8), dp(c, 10));
+        item.addView(label, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        View indicator = new View(c);
+        indicator.setBackgroundColor(active ? ACCENT : Color.TRANSPARENT);
+        item.addView(indicator, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(c, 3)));
+        return item;
+    }
+
+    static LinearLayout tabs(Context c, View... items) {
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setBackgroundColor(FIELD);
+        for (View item : items) {
+            row.addView(item, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(c, 8);
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    /** 활성 탭 아래에 이어지는 세부 설정 영역. */
+    static LinearLayout tabContent(Context c) {
+        LinearLayout content = new LinearLayout(c);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(c, 10), dp(c, 2), dp(c, 10), 0);
+        content.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return content;
     }
 
     private static int blend(int color) {

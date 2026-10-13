@@ -31,6 +31,9 @@ public class ShortcutStore {
     static final String KEY_V_RANGE = "v_range";
     static final String KEY_V_TEMP = "v_temp";
     static final String KEY_V_EFF = "v_eff";
+    private static final String KEY_V_EFF_PLOG_LEGACY = "v_eff_plog";
+    private static final String KEY_V_EFF_RANGE_LEGACY = "v_eff_range";
+    private static final String KEY_EFF_WIDGET_MERGED = "eff_widget_merged_v1";
     static final String KEY_MUSIC_ON = "music_on";
 
     static final String KEY_SCALE = "dock_scale"; // 퍼센트 50~200
@@ -50,6 +53,10 @@ public class ShortcutStore {
     static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top/right/bottom
     static final String KEY_GRID_BG_MODE = "grid_bg_mode"; // default/color/photo
     static final String KEY_GRID_BG_COLOR = "grid_bg_color";
+    static final String KEY_GRID_PHOTO_SIZE = "grid_photo_size";       // fit/fill/original
+    static final String KEY_GRID_PHOTO_ALIGN_X = "grid_photo_align_x"; // left/center/right
+    static final String KEY_GRID_PHOTO_ALIGN_Y = "grid_photo_align_y"; // top/center/bottom
+    static final String KEY_GRID_PHOTO_BACKDROP = "grid_photo_backdrop"; // color/blur
     static final int DEFAULT_GRID_BG_COLOR = 0xFF141516;
 
     static final String DEFAULT_DATE_FMT = "M월 d일 (E)";
@@ -108,6 +115,13 @@ public class ShortcutStore {
     /** 저장된 순서(없으면 기본). 누락 id는 뒤에 보충. */
     static List<String> widgetOrder(Context ctx) {
         SharedPreferences sp = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+        if (!sp.getBoolean(KEY_EFF_WIDGET_MERGED, false)) {
+            boolean enabled = sp.getBoolean(KEY_V_EFF, false)
+                    || sp.getBoolean(KEY_V_EFF_PLOG_LEGACY, false)
+                    || sp.getBoolean(KEY_V_EFF_RANGE_LEGACY, false);
+            sp.edit().putBoolean(KEY_V_EFF, enabled)
+                    .putBoolean(KEY_EFF_WIDGET_MERGED, true).apply();
+        }
         String s = sp.getString(KEY_WIDGET_ORDER, "");
         List<String> order = new ArrayList<>();
         for (String id : s.split(",")) {
@@ -137,7 +151,7 @@ public class ShortcutStore {
         android.content.SharedPreferences sp = c.getSharedPreferences(PREF, Context.MODE_PRIVATE);
         return sp.getBoolean(KEY_V_GEAR, false) || sp.getBoolean(KEY_V_SPEED, false)
                 || sp.getBoolean(KEY_V_BATTERY, false) || sp.getBoolean(KEY_V_RANGE, false)
-                || sp.getBoolean(KEY_V_TEMP, false);
+                || sp.getBoolean(KEY_V_TEMP, false) || sp.getBoolean(KEY_V_EFF, false);
     }
 
     static final String SETTINGS_PKG = "com.android.car.settings";

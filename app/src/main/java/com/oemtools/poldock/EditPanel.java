@@ -1,6 +1,8 @@
 package com.oemtools.poldock;
 
+import android.animation.LayoutTransition;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -10,6 +12,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.view.Gravity;
+import android.view.DragEvent;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +24,7 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -39,6 +43,21 @@ public class EditPanel {
     private boolean showing;
     private boolean scrollToBottomOnShow;
     private int photoPickerScrollY = -1;
+
+    private static final class WidgetDragData {
+        final String id;
+        final View row;
+        final LinearLayout container;
+        final List<String> order;
+        boolean saved;
+
+        WidgetDragData(String id, View row, LinearLayout container, List<String> order) {
+            this.id = id;
+            this.row = row;
+            this.container = container;
+            this.order = new ArrayList<>(order);
+        }
+    }
 
     private final SharedPreferences.OnSharedPreferenceChangeListener lis =
             (p, k) -> {
@@ -249,33 +268,33 @@ public class EditPanel {
         card.addView(Ui.sectionLabel(c, "배치"));
 
         String ori = sp.getString(oriKeyE(), "h");
-        card.addView(Ui.rowGap(c,
-                segBtn("가로", "h", ori),
-                segBtn("세로", "v", ori),
-                segBtn("그리드", "g", ori)));
+        card.addView(Ui.tabs(c,
+                Ui.tab(c, "가로", "h".equals(ori),
+                        v -> sp.edit().putString(oriKeyE(), "h").apply()),
+                Ui.tab(c, "세로", "v".equals(ori),
+                        v -> sp.edit().putString(oriKeyE(), "v").apply()),
+                Ui.tab(c, "그리드", "g".equals(ori),
+                        v -> sp.edit().putString(oriKeyE(), "g").apply())));
+        LinearLayout tabContent = Ui.tabContent(c);
+        card.addView(tabContent);
 
         if ("g".equals(ori)) {
             int cols = sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID);
             int rows = sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
-            card.addView(gridStepper(c, "열 (가로 칸)", ShortcutStore.KEY_GRID_C, cols));
-            card.addView(gridStepper(c, "행 (세로 칸)", ShortcutStore.KEY_GRID_R, rows));
             // 위치: 우상단 / 상하 통합 / 우하단 (드래그 불가, 여기서 선택)
             String gpos = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
-            card.addView(Ui.fieldLabel(c, "위치"));
-            card.addView(Ui.rowGap(c,
-                    Ui.button(c, "우상단", "top".equals(gpos) ? Ui.ACCENT : Ui.GREY,
-                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "top").apply()),
-                    Ui.button(c, "우측(통합)", "right".equals(gpos) ? Ui.ACCENT : Ui.GREY,
-                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "right").apply()),
-                    Ui.button(c, "우하단", "bottom".equals(gpos) ? Ui.ACCENT : Ui.GREY,
-                            v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, "bottom").apply())));
-            TextView n = Ui.fieldLabel(c, "우측(통합)은 우상단·우하단을 합친 전체 높이입니다.");
-            card.addView(n);
-            addGridBackgroundControls(card);
+            tabContent.addView(Ui.fieldLabel(c, "위치"));
+            tabContent.addView(Ui.rowGap(c,
+                    gridPositionOption("우상단", "top", gpos),
+                    gridPositionOption("우측 전체", "right", gpos),
+                    gridPositionOption("우하단", "bottom", gpos)));
+            tabContent.addView(gridStepper(c, "열 (가로 칸)", ShortcutStore.KEY_GRID_C, cols));
+            tabContent.addView(gridStepper(c, "행 (세로 칸)", ShortcutStore.KEY_GRID_R, rows));
+            addGridBackgroundControls(tabContent);
         } else {
             int pct = sp.getInt(scaleKeyE(), ShortcutStore.DEFAULT_SCALE);
             final TextView sizeLabel = Ui.fieldLabel(c, "독 크기: " + pct + "%");
-            card.addView(sizeLabel);
+            tabContent.addView(sizeLabel);
             SeekBar seek = new SeekBar(c);
             seek.setMax(150);
             seek.setProgress(Math.max(0, Math.min(150, pct - 50)));
@@ -294,17 +313,17 @@ public class EditPanel {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = Ui.dp(c, 4);
-            card.addView(seek, lp);
+            tabContent.addView(seek, lp);
         }
 
         // 투명도 (가로/세로 전용 — 그리드는 항상 불투명 고정)
         if ("g".equals(ori)) {
-            card.addView(Ui.fieldLabel(c, "그리드는 항상 불투명으로 고정됩니다."));
+            tabContent.addView(Ui.fieldLabel(c, "그리드는 항상 불투명으로 고정됩니다."));
             return card;
         }
         int apct = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);
         final TextView alphaLabel = Ui.fieldLabel(c, "독 불투명도: " + apct + "%");
-        card.addView(alphaLabel);
+        tabContent.addView(alphaLabel);
         SeekBar aseek = new SeekBar(c);
         aseek.setMax(80);                               // 20~100 → 0~80
         aseek.setProgress(Math.max(0, Math.min(80, apct - 20)));
@@ -323,8 +342,14 @@ public class EditPanel {
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         alp.topMargin = Ui.dp(c, 4);
-        card.addView(aseek, alp);
+        tabContent.addView(aseek, alp);
         return card;
+    }
+
+    private View gridPositionOption(String description, String value, String current) {
+        return Ui.iconButton(svc, new GridPositionIconDrawable(value), description,
+                value.equals(current) ? Ui.ACCENT : Ui.GREY,
+                v -> sp.edit().putString(ShortcutStore.KEY_GRID_POS, value).apply());
     }
 
     private void addGridBackgroundControls(LinearLayout card) {
@@ -333,23 +358,102 @@ public class EditPanel {
         int color = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
                 ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
         card.addView(Ui.fieldLabel(c, "배경"));
-        TextView colorButton = Ui.button(c, "색상", "color".equals(mode) ? color : Ui.GREY,
-                v -> showGridColorDialog());
+        card.addView(Ui.tabs(c,
+                Ui.tab(c, "기본", "default".equals(mode),
+                        v -> sp.edit().putString(
+                                ShortcutStore.KEY_GRID_BG_MODE, "default").apply()),
+                Ui.tab(c, "단색", "color".equals(mode),
+                        v -> sp.edit().putString(
+                                ShortcutStore.KEY_GRID_BG_MODE, "color").apply()),
+                Ui.tab(c, "사진", "photo".equals(mode),
+                        v -> selectPhotoBackground())));
+
         if ("color".equals(mode)) {
+            LinearLayout details = Ui.tabContent(c);
+            TextView colorButton = Ui.button(c, "배경색 변경", color,
+                    v -> showGridColorDialog(true));
             double luminance = Color.red(color) * 0.299
                     + Color.green(color) * 0.587 + Color.blue(color) * 0.114;
             colorButton.setTextColor(luminance > 170 ? Color.BLACK : Color.WHITE);
+            details.addView(colorButton);
+            card.addView(details);
+        } else if ("photo".equals(mode)) {
+            LinearLayout details = Ui.tabContent(c);
+            addGridPhotoControls(details, color);
+            card.addView(details);
         }
-        card.addView(Ui.rowGap(c,
-                Ui.button(c, "기본", "default".equals(mode) ? Ui.ACCENT : Ui.GREY,
-                        v -> sp.edit().putString(
-                                ShortcutStore.KEY_GRID_BG_MODE, "default").apply()),
-                colorButton,
-                Ui.button(c, "사진", "photo".equals(mode) ? Ui.ACCENT : Ui.GREY,
-                        v -> launchPhotoPicker())));
     }
 
-    private void showGridColorDialog() {
+    private void selectPhotoBackground() {
+        java.io.File photo = new java.io.File(svc.getFilesDir(),
+                GridBackgroundPickerActivity.PHOTO_FILE);
+        if (photo.isFile()) {
+            sp.edit().putString(ShortcutStore.KEY_GRID_BG_MODE, "photo").apply();
+        } else {
+            launchPhotoPicker();
+        }
+    }
+
+    private void addGridPhotoControls(LinearLayout card, int color) {
+        Context c = svc;
+        String size = sp.getString(ShortcutStore.KEY_GRID_PHOTO_SIZE, "fit");
+        String alignX = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_X, "center");
+        String alignY = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y, "bottom");
+        String backdrop = sp.getString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
+
+        card.addView(Ui.button(c, "다른 사진 선택", Ui.GREY, v -> launchPhotoPicker()));
+        card.addView(Ui.fieldLabel(c, "사진 표시 방식"));
+        card.addView(Ui.rowGap(c,
+                photoOption("맞춤", ShortcutStore.KEY_GRID_PHOTO_SIZE, "fit", size),
+                photoOption("꽉 채우기", ShortcutStore.KEY_GRID_PHOTO_SIZE, "fill", size),
+                photoOption("원본 크기", ShortcutStore.KEY_GRID_PHOTO_SIZE, "original", size)));
+
+        card.addView(Ui.fieldLabel(c, "좌우 정렬"));
+        card.addView(Ui.rowGap(c,
+                photoAlignmentOption("왼쪽 정렬", "x", ShortcutStore.KEY_GRID_PHOTO_ALIGN_X,
+                        "left", alignX),
+                photoAlignmentOption("가운데 정렬", "x", ShortcutStore.KEY_GRID_PHOTO_ALIGN_X,
+                        "center", alignX),
+                photoAlignmentOption("오른쪽 정렬", "x", ShortcutStore.KEY_GRID_PHOTO_ALIGN_X,
+                        "right", alignX)));
+
+        card.addView(Ui.fieldLabel(c, "상하 정렬"));
+        card.addView(Ui.rowGap(c,
+                photoAlignmentOption("위쪽 정렬", "y", ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y,
+                        "top", alignY),
+                photoAlignmentOption("가운데 정렬", "y", ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y,
+                        "center", alignY),
+                photoAlignmentOption("아래쪽 정렬", "y", ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y,
+                        "bottom", alignY)));
+
+        card.addView(Ui.fieldLabel(c, "사진 밖의 여백"));
+        TextView backdropColor = Ui.button(c, "단색 여백",
+                "color".equals(backdrop) ? color : Ui.GREY,
+                v -> showGridColorDialog(false));
+        if ("color".equals(backdrop)) {
+            double luminance = Color.red(color) * 0.299
+                    + Color.green(color) * 0.587 + Color.blue(color) * 0.114;
+            backdropColor.setTextColor(luminance > 170 ? Color.BLACK : Color.WHITE);
+        }
+        card.addView(Ui.rowGap(c,
+                backdropColor,
+                photoOption("블러 여백", ShortcutStore.KEY_GRID_PHOTO_BACKDROP,
+                        "blur", backdrop)));
+    }
+
+    private View photoOption(String label, String key, String value, String current) {
+        return Ui.button(svc, label, value.equals(current) ? Ui.ACCENT : Ui.GREY,
+                v -> sp.edit().putString(key, value).apply());
+    }
+
+    private View photoAlignmentOption(String description, String axis, String key,
+                                      String value, String current) {
+        return Ui.iconButton(svc, new AlignmentIconDrawable(axis, value), description,
+                value.equals(current) ? Ui.ACCENT : Ui.GREY,
+                v -> sp.edit().putString(key, value).apply());
+    }
+
+    private void showGridColorDialog(boolean selectColorMode) {
         Context c = svc;
         int initial = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
                 ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
@@ -398,13 +502,20 @@ public class EditPanel {
         blue.setOnSeekBarChangeListener(listener);
 
         AlertDialog dialog = new AlertDialog.Builder(c)
-                .setTitle("그리드 배경색")
+                .setTitle(selectColorMode ? "그리드 배경색" : "사진 밖의 여백 색상")
                 .setView(panel)
-                .setPositiveButton("적용", (d, w) -> sp.edit()
-                        .putInt(ShortcutStore.KEY_GRID_BG_COLOR,
-                                Color.rgb(rgb[0], rgb[1], rgb[2]))
-                        .putString(ShortcutStore.KEY_GRID_BG_MODE, "color")
-                        .apply())
+                .setPositiveButton("적용", (d, w) -> {
+                    SharedPreferences.Editor editor = sp.edit()
+                            .putInt(ShortcutStore.KEY_GRID_BG_COLOR,
+                                    Color.rgb(rgb[0], rgb[1], rgb[2]));
+                    if (selectColorMode) {
+                        editor.putString(ShortcutStore.KEY_GRID_BG_MODE, "color");
+                    } else {
+                        editor.putString(ShortcutStore.KEY_GRID_BG_MODE, "photo")
+                                .putString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
+                    }
+                    editor.apply();
+                })
                 .setNegativeButton("취소", null)
                 .create();
         if (dialog.getWindow() != null) {
@@ -472,22 +583,20 @@ public class EditPanel {
         return b;
     }
 
-    private TextView segBtn(String label, String val, String cur) {
-        boolean active = val.equals(cur);
-        return Ui.button(svc, label, active ? Ui.ACCENT : Ui.GREY, v -> {
-            sp.edit().putString(oriKeyE(), val).apply();
-        });
-    }
-
     // 위젯
     private View buildWidgetCard() {
         Context c = svc;
         LinearLayout card = Ui.card(c);
-        card.addView(Ui.sectionLabel(c, "위젯 (탭하여 켜고 끄기 · ↑↓ 순서)"));
+        card.addView(Ui.sectionLabel(c, "위젯 (탭하여 켜고 끄기 · 손잡이를 길게 눌러 순서 변경)"));
         boolean dark = sp.getBoolean(ShortcutStore.KEY_DARK, false);
-        card.addView(Ui.button(c, dark ? "🌙 위젯 다크 모드  ●" : "☀️ 위젯 라이트 모드  ○",
+        View themeButton = Ui.button(c,
+                dark ? "🌙 위젯 다크 모드  ●" : "☀️ 위젯 라이트 모드  ○",
                 dark ? Ui.GREEN : Ui.GREY,
-                v -> sp.edit().putBoolean(ShortcutStore.KEY_DARK, !dark).apply()));
+                v -> sp.edit().putBoolean(ShortcutStore.KEY_DARK, !dark).apply());
+        LinearLayout.LayoutParams themeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        themeLp.bottomMargin = Ui.dp(c, 8);
+        card.addView(themeButton, themeLp);
         final List<String> order = ShortcutStore.widgetOrder(c);
         for (int i = 0; i < order.size(); i++) {
             final String id = order.get(i);
@@ -500,28 +609,110 @@ public class EditPanel {
             name.setTextSize(16);
             row.addView(name, new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            name.setOnClickListener(v -> {
+            row.setOnClickListener(v -> {
                 boolean cur = sp.getBoolean(ShortcutStore.widgetOnKey(id), ShortcutStore.widgetDefaultOn(id));
                 sp.edit().putBoolean(ShortcutStore.widgetOnKey(id), !cur).apply();
             });
-            final int fi = i;
-            row.addView(chipGap("↑", Ui.GREY, v -> moveWidget(fi, -1)));
-            row.addView(chipGap("↓", Ui.GREY, v -> moveWidget(fi, 1)));
+            View handle = chipGap("≡", Ui.GREY, v -> { });
+            handle.setContentDescription("순서 변경");
+            handle.setOnLongClickListener(v -> startWidgetDrag(row, id, card, order));
+            row.addView(handle);
+            row.setOnDragListener((target, event) -> handleWidgetDrag(row, id, event));
             card.addView(row);
         }
         TextView note = Ui.fieldLabel(c, "※ 음악은 '알림 접근' 허용 필요");
         card.addView(note);
+        LayoutTransition transition = new LayoutTransition();
+        transition.setDuration(120);
+        card.setLayoutTransition(transition);
         return card;
     }
 
-    private void moveWidget(int idx, int dir) {
-        List<String> order = ShortcutStore.widgetOrder(svc);
-        int j = idx + dir;
-        if (j < 0 || j >= order.size()) return;
-        String tmp = order.get(idx);
-        order.set(idx, order.get(j));
-        order.set(j, tmp);
-        ShortcutStore.saveWidgetOrder(svc, order);  // -> lis -> populate
+    private boolean startWidgetDrag(View row, String id, LinearLayout container,
+                                    List<String> order) {
+        WidgetDragData local = new WidgetDragData(id, row, container, order);
+        View.DragShadowBuilder shadow = new View.DragShadowBuilder(row);
+        boolean started;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            started = row.startDragAndDrop(
+                    ClipData.newPlainText("widget", id), shadow, local, 0);
+        } else {
+            started = row.startDrag(
+                    ClipData.newPlainText("widget", id), shadow, local, 0);
+        }
+        if (started) row.setAlpha(0.45f);
+        return started;
+    }
+
+    private boolean handleWidgetDrag(View row, String targetId, DragEvent event) {
+        if (!(event.getLocalState() instanceof WidgetDragData)) return false;
+        WidgetDragData dragged = (WidgetDragData) event.getLocalState();
+        switch (event.getAction()) {
+            case DragEvent.ACTION_DRAG_STARTED:
+                return true;
+            case DragEvent.ACTION_DRAG_ENTERED:
+                if (dragged.row != row) {
+                    row.setBackground(Ui.round(0xFF343A46, Ui.dp(svc, 14)));
+                    previewWidgetOrder(dragged, row, targetId);
+                }
+                return true;
+            case DragEvent.ACTION_DRAG_LOCATION:
+                autoScrollWidgetDrag(row, event.getY());
+                return true;
+            case DragEvent.ACTION_DRAG_EXITED:
+                row.setBackground(Ui.round(Ui.FIELD, Ui.dp(svc, 14)));
+                return true;
+            case DragEvent.ACTION_DROP:
+                row.setBackground(Ui.round(Ui.FIELD, Ui.dp(svc, 14)));
+                return true;
+            case DragEvent.ACTION_DRAG_ENDED:
+                dragged.row.setAlpha(1f);
+                row.setBackground(Ui.round(Ui.FIELD, Ui.dp(svc, 14)));
+                saveWidgetDragOrder(dragged);
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private void previewWidgetOrder(WidgetDragData dragged, View target, String targetId) {
+        int sourceViewIndex = dragged.container.indexOfChild(dragged.row);
+        int targetViewIndex = dragged.container.indexOfChild(target);
+        int sourceOrderIndex = dragged.order.indexOf(dragged.id);
+        int targetOrderIndex = dragged.order.indexOf(targetId);
+        if (sourceViewIndex < 0 || targetViewIndex < 0
+                || sourceOrderIndex < 0 || targetOrderIndex < 0
+                || sourceOrderIndex == targetOrderIndex) return;
+
+        ViewGroup.LayoutParams params = dragged.row.getLayoutParams();
+        dragged.container.removeView(dragged.row);
+        dragged.container.addView(dragged.row,
+                Math.min(targetViewIndex, dragged.container.getChildCount()), params);
+
+        dragged.order.remove(sourceOrderIndex);
+        dragged.order.add(Math.min(targetOrderIndex, dragged.order.size()), dragged.id);
+    }
+
+    private void saveWidgetDragOrder(WidgetDragData dragged) {
+        if (dragged.saved) return;
+        dragged.saved = true;
+        List<String> result = new ArrayList<>(dragged.order);
+        dragged.container.post(() -> ShortcutStore.saveWidgetOrder(svc, result));
+    }
+
+    private void autoScrollWidgetDrag(View target, float localY) {
+        if (sheet == null) return;
+        int[] targetPos = new int[2];
+        int[] sheetPos = new int[2];
+        target.getLocationOnScreen(targetPos);
+        sheet.getLocationOnScreen(sheetPos);
+        float screenY = targetPos[1] + localY;
+        int edge = Ui.dp(svc, 72);
+        if (screenY < sheetPos[1] + edge) {
+            sheet.scrollBy(0, -Ui.dp(svc, 18));
+        } else if (screenY > sheetPos[1] + sheet.getHeight() - edge) {
+            sheet.scrollBy(0, Ui.dp(svc, 18));
+        }
     }
 
     // 바로가기
