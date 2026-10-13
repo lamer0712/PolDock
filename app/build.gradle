@@ -5,6 +5,8 @@ plugins {
 def configuredGithubRepository = providers.gradleProperty('poldock.githubRepository')
         .orElse(providers.environmentVariable('POLDOCK_GITHUB_REPOSITORY'))
         .getOrElse('')
+def configuredVersionCode = providers.gradleProperty('poldock.versionCode').getOrElse('1')
+def configuredVersionName = providers.gradleProperty('poldock.versionName').getOrElse('1.0')
 
 def githubRepository = configuredGithubRepository
 if (!githubRepository) {
@@ -26,8 +28,8 @@ android {
         // 폴스타4엔 오버레이 허용 설정 화면이 없어 이 방식으로 권한을 받는다.
         minSdk 22
         targetSdk 22
-        versionCode 1
-        versionName '1.0'
+        versionCode configuredVersionCode.toInteger()
+        versionName configuredVersionName
         buildConfigField 'String', 'GITHUB_REPOSITORY',
                 '"' + githubRepository.replace('\\', '\\\\').replace('"', '\\"') + '"'
     }
