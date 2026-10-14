@@ -176,6 +176,7 @@ public class OverlayService extends Service {
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
                 if (UpdateManager.isInternalPreference(key)) return;
+                if (EfficiencyTracker.isInternalPreference(key)) return;
                 if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
                 if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
@@ -1387,20 +1388,25 @@ public class OverlayService extends Service {
     }
 
     private void startVehicle() {
-        vehicle = new VehicleInfo();
-        efficiencyTracker = new EfficiencyTracker(sp);
+        final VehicleInfo sessionVehicle = new VehicleInfo();
+        final EfficiencyTracker sessionTracker = new EfficiencyTracker(sp);
+        vehicle = sessionVehicle;
+        efficiencyTracker = sessionTracker;
         vehThread = new HandlerThread("veh");
         vehThread.start();
-        vehHandler = new Handler(vehThread.getLooper());
+        final Handler sessionHandler = new Handler(vehThread.getLooper());
+        vehHandler = sessionHandler;
         // 속도 바늘 빠른 갱신 (~4.5Hz): 속도 위젯이 있을 때만
         if (speedNeedle != null) {
-            vehHandler.post(new Runnable() {
+            sessionHandler.post(new Runnable() {
                 public void run() {
-                    if (vehicle != null && vehicle.isConnected()) {
-                        Float mps = vehicle.speedMps();
+                    if (vehicle != sessionVehicle || vehHandler != sessionHandler) return;
+                    if (sessionVehicle.isConnected()) {
+                        Float mps = sessionVehicle.speedMps();
                         if (mps != null) {
                             final float kmh = Math.abs(mps) * 3.6f;
                             ui.post(() -> {
+                                if (vehicle != sessionVehicle) return;
                                 updateSpeedNeedle(kmh);
                                 TextView tv = vehValues.get(ShortcutStore.KEY_V_SPEED);
                                 if (tv != null) tv.setText(speedNum(Math.round(kmh)));
@@ -1408,15 +1414,18 @@ public class OverlayService extends Service {
                             });
                         }
                     }
-                    if (vehHandler != null) vehHandler.postDelayed(this, 220);
+                    if (vehicle == sessionVehicle && vehHandler == sessionHandler)
+                        sessionHandler.postDelayed(this, 220);
                 }
             });
         }
-        vehHandler.post(new Runnable() {
+        sessionHandler.post(new Runnable() {
             public void run() {
-                if (!vehicle.isConnected()) vehicle.connect(getApplicationContext());
-                final Map<String, String> vals = readVehicle();
+                if (vehicle != sessionVehicle || vehHandler != sessionHandler) return;
+                if (!sessionVehicle.isConnected()) sessionVehicle.connect(getApplicationContext());
+                final Map<String, String> vals = readVehicle(sessionVehicle, sessionTracker);
                 ui.post(() -> {
+                    if (vehicle != sessionVehicle) return;
                     for (Map.Entry<String, TextView> e : vehValues.entrySet()) {
                         String v = vals.get(e.getKey());
                         CharSequence cs;
@@ -1455,7 +1464,8 @@ public class OverlayService extends Service {
                         e.getValue().setText(cs);
                     }
                 });
-                if (vehHandler != null) vehHandler.postDelayed(this, 1000);
+                if (vehicle == sessionVehicle && vehHandler == sessionHandler)
+                    sessionHandler.postDelayed(this, 1000);
             }
         });
     }
@@ -1531,9 +1541,9 @@ public class OverlayService extends Service {
         return sb;
     }
 
-    private Map<String, String> readVehicle() {
+    private Map<String, String> readVehicle(VehicleInfo vehicle, EfficiencyTracker tracker) {
         Map<String, String> m = new LinkedHashMap<>();
-        if (vehicle == null || !vehicle.isConnected()) return m;
+        if (!vehicle.isConnected()) return m;
         if (vehValues.containsKey(ShortcutStore.KEY_V_GEAR)) {
             String g = vehicle.gear();
             if (g != null) m.put(ShortcutStore.KEY_V_GEAR, g);
@@ -1555,29 +1565,30 @@ public class OverlayService extends Service {
             if (t != null) m.put(ShortcutStore.KEY_V_TEMP, t + "°");
         }
         if (vehValues.containsKey(ShortcutStore.KEY_V_EFF)) {
-            efficiencyTracker.sample(
+            VehicleInfo.FloatSample power = vehicle.chargeRateSample();
+            tracker.sample(
                     SystemClock.elapsedRealtime(),
                     vehicle.gear(),
                     vehicle.speedMps(),
-                    vehicle.chargeRateMilliwatts(),
+                    power.value,
+                    power.timestampNanos,
                     vehicle.batteryWh(),
                     vehicle.wheelTicks(),
                     vehicle.wheelMicrometresPerTick());
 
-            Float efficiency = efficiencyTracker.efficiencyKmPerKwh();
-            if (efficiency == null) {
-                efficiency = efficiencyTracker.calibratedEfficiency(
-                        vehicle.predictedEfficiencyKmPerKwh());
-            }
+            Float kwh100km = vehicle.tripAverageEfficiencyKwh100Km();
+            Float efficiency;
+            if (kwh100km != null) efficiency = 100f / kwh100km;
+            else efficiency = tracker.efficiencyKmPerKwh();
             putEfficiency(m, ShortcutStore.KEY_V_EFF, efficiency);
         }
         return m;
     }
 
     private void putEfficiency(Map<String, String> values, String key, Float efficiency) {
-        String value = efficiency != null && Float.isFinite(efficiency) && efficiency > 0f
-                ? String.format(Locale.US, "%.3f", efficiency) : "";
-        values.put(key, value);
+        if (efficiency != null && Float.isFinite(efficiency) && efficiency > 0f) {
+            values.put(key, String.format(Locale.US, "%.3f", efficiency));
+        }
     }
 
     private void stopVehicle() {
@@ -1799,14 +1810,7 @@ public class OverlayService extends Service {
         homeFgNow = isDisplayAreaHome(displayAreaState);
         String want = activeMode();
         if (!want.equals(mode)) {
-            // 그리드 상태에서 홈을 벗어나면: 세로형 + 우측 센터로 전환
-            boolean leavingHomeFromGrid = "home".equals(mode) && "default".equals(want) && gridActive;
             installDock();   // 모드 바뀌면 그 모드의 배치로 재구성 (mode=want로 갱신됨)
-            if (leavingHomeFromGrid) {
-                if (!"v".equals(sp.getString(mk(KEY_ORI), "h")))
-                    sp.edit().putString(mk(KEY_ORI), "v").apply();   // default 배치=세로
-                moveToRightCenter();
-            }
         }
     }
 
@@ -1872,20 +1876,6 @@ public class OverlayService extends Service {
         clamp();
         wm.updateViewLayout(dock, lp);
         sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
-    }
-
-    /** 세로형으로 화면 우측 세로 중앙에 배치. */
-    private void moveToRightCenter() {
-        if (dock == null) return;
-        dock.post(() -> {
-            DisplayMetrics dm = realMetrics();
-            int w = dock.getWidth(), h = dock.getHeight();
-            lp.x = dm.widthPixels - w - d(4);
-            lp.y = (dm.heightPixels - h) / 2;
-            clamp();
-            wm.updateViewLayout(dock, lp);
-            sp.edit().putInt(mk(KEY_X), lp.x).putInt(mk(KEY_Y), lp.y).apply();
-        });
     }
 
     private int insetTop() {

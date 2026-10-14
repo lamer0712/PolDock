@@ -4,7 +4,9 @@ import android.content.Context;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Android Car API(CarPropertyManager)로 VHAL 속성을 읽는다. 전부 리플렉션이라
@@ -19,8 +21,19 @@ import java.util.List;
  *   RANGE_REMAINING       291504904 (0x11600308)  CAR_ENERGY            [m]
  *   EV_BATTERY_INSTANTANEOUS_CHARGE_RATE 291504908 (0x1160030C) CAR_ENERGY [mW]
  *   WHEEL_TICK             290521862 (0x11510306)  CAR_SPEED             [ticks]
+ *   TRIP_AVG_ENERGY_CONSUMPTION 627077242 (0x2560707A) vendor [kWh/100km]
  */
 public class VehicleInfo {
+
+    static final class FloatSample {
+        final Float value;
+        final long timestampNanos;
+
+        FloatSample(Float value, long timestampNanos) {
+            this.value = value;
+            this.timestampNanos = timestampNanos;
+        }
+    }
 
     public static final int GEAR_SELECTION = 289408000;
     public static final int PERF_VEHICLE_SPEED = 291504647;
@@ -30,6 +43,7 @@ public class VehicleInfo {
     public static final int RANGE_REMAINING = 291504904;
     public static final int EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908;
     public static final int WHEEL_TICK = 290521862;
+    public static final int TRIP_AVG_ENERGY_CONSUMPTION = 627077242;
 
     private Object car;
     private Object cpm;
@@ -38,6 +52,8 @@ public class VehicleInfo {
     private Method getTypedProperty;
     private Method getPropertyConfig;
     private int[] wheelMicrometresPerTick;
+    private int[] tripEfficiencyAreas;
+    private boolean tripEfficiencyProbed;
     private boolean connected;
 
     boolean connect(Context ctx) {
@@ -80,8 +96,13 @@ public class VehicleInfo {
     }
 
     private Float readFloat(int prop) {
+        return readFloat(prop, 0);
+    }
+
+    private Float readFloat(int prop, int area) {
         try {
-            return (Float) getFloat.invoke(cpm, prop, 0);
+            Object value = getFloat.invoke(cpm, prop, area);
+            return value instanceof Number ? ((Number) value).floatValue() : null;
         } catch (Throwable t) {
             return null;
         }
@@ -120,8 +141,26 @@ public class VehicleInfo {
     }
 
     /** 순간 충전(+)/방전(-) 전력 mW, 못 읽으면 null. */
-    Float chargeRateMilliwatts() {
-        return readFloat(EV_BATTERY_INSTANTANEOUS_CHARGE_RATE);
+    FloatSample chargeRateSample() {
+        if (getTypedProperty != null) {
+            try {
+                Object property = getTypedProperty.invoke(cpm, Float.class,
+                        EV_BATTERY_INSTANTANEOUS_CHARGE_RATE, 0);
+                if (property != null) {
+                    Object rawValue = property.getClass().getMethod("getValue").invoke(property);
+                    Object rawTimestamp = property.getClass().getMethod("getTimestamp").invoke(property);
+                    if (rawValue instanceof Number) {
+                        float value = ((Number) rawValue).floatValue();
+                        long timestamp = rawTimestamp instanceof Number
+                                ? ((Number) rawTimestamp).longValue() : 0L;
+                        if (Float.isFinite(value)) return new FloatSample(value, timestamp);
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 구형 Car API나 OEM 타입 차이는 아래 안전한 float 읽기로 대체한다.
+            }
+        }
+        return new FloatSample(readFloat(EV_BATTERY_INSTANTANEOUS_CHARGE_RATE), 0L);
     }
 
     /** 현재 남은 배터리 에너지 Wh, 못 읽으면 null. */
@@ -129,7 +168,7 @@ public class VehicleInfo {
         return readFloat(EV_BATTERY_LEVEL);
     }
 
-    /** WHEEL_TICK의 [timestamp, FL, FR, RL, RR], 못 읽으면 null. */
+    /** WHEEL_TICK의 [reset count, FL, FR, RR, RL], 못 읽으면 null. */
     long[] wheelTicks() {
         if (getTypedProperty == null) return null;
         try {
@@ -174,22 +213,55 @@ public class VehicleInfo {
         }
     }
 
+    /**
+     * OEM 자동 트립 평균 소비전력. 벤더 속성이므로 지원 area를 설정에서 찾아 읽고,
+     * 권한/타입/펌웨어 차이는 전부 null로 처리한다.
+     */
+    Float tripAverageEfficiencyKwh100Km() {
+        if (!tripEfficiencyProbed) {
+            tripEfficiencyAreas = readAreaIds(TRIP_AVG_ENERGY_CONSUMPTION);
+            tripEfficiencyProbed = true;
+        }
+        int[] areas = tripEfficiencyAreas;
+        if (areas == null || areas.length == 0) return null;
+        for (int area : areas) {
+            Float value = readFloat(TRIP_AVG_ENERGY_CONSUMPTION, area);
+            // 폴스타 트립 화면의 정상 단위는 kWh/100km. 다른 타입/배율 값은 채택하지 않는다.
+            if (value != null && Float.isFinite(value) && value >= 5f && value <= 100f) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private int[] readAreaIds(int propertyId) {
+        if (getPropertyConfig == null) return null;
+        try {
+            Object config = getPropertyConfig.invoke(cpm, propertyId);
+            if (config == null) return null;
+            Object raw = config.getClass().getMethod("getAreaIds").invoke(config);
+            Set<Integer> result = new LinkedHashSet<>();
+            if (raw instanceof int[]) {
+                for (int area : (int[]) raw) result.add(area);
+            } else if (raw instanceof Object[]) {
+                for (Object area : (Object[]) raw) {
+                    if (area instanceof Number) result.add(((Number) area).intValue());
+                }
+            }
+            int[] values = new int[result.size()];
+            int i = 0;
+            for (Integer area : result) values[i++] = area;
+            return values;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     /** 주행가능거리 km, 못 읽으면 null */
     Integer rangeKm() {
         Float m = readFloat(RANGE_REMAINING);
         if (m == null) return null;
         return Math.round(m / 1000f);
-    }
-
-    /** 주행가능거리와 남은 배터리 에너지로 계산한 예상 전비 km/kWh. */
-    Float predictedEfficiencyKmPerKwh() {
-        Float rangeM = readFloat(RANGE_REMAINING);
-        Float remainingWh = readFloat(EV_BATTERY_LEVEL);
-        if (rangeM == null || remainingWh == null || rangeM <= 0f || remainingWh <= 0f) {
-            return null;
-        }
-        float value = rangeM / remainingWh;
-        return Float.isFinite(value) && value > 0f ? value : null;
     }
 
     /** 배터리 %, 못 읽으면 null */

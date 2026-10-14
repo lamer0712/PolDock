@@ -117,7 +117,12 @@ public class EditPanel {
     // ------------------------------------------------------------ 표시/숨김
 
     void show() {
-        if (showing) return;
+        if (showing) {
+            if (root != null && root.getVisibility() != View.VISIBLE) {
+                restoreAfterPhotoPicker();
+            }
+            return;
+        }
         Context c = svc;
 
         FrameLayout scrim = new FrameLayout(c);
