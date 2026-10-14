@@ -75,7 +75,7 @@ public class OverlayService extends Service {
     // 런처 즐겨찾기 카드(타일) 크기: fav_card_width/height (OEM dimens)
     private static final int GRID_TILE_W_DP = 532;
     private static final int GRID_TILE_H_DP = 576;
-    private static final int GRID_TILE_GAP_DP = 16;   // 런처 상·하 타일 사이 간격
+    private static final int GRID_TILE_GAP_DP = 16;   // 런처 2x2 타일 사이 간격 (launcher_owner.xml)
     // 런처 카드 헤더 아이콘: card_icon_size=64dp, card_icon_margin_*=32dp
     private static final int CARD_ICON_DP = 64;
     private static final int CARD_ICON_MARGIN_DP = 32;
@@ -340,17 +340,13 @@ public class OverlayService extends Service {
             float density = getResources().getDisplayMetrics().density;
             DisplayMetrics gdm = realMetrics();
             String gridPosition = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
-            boolean fullWidth = "top_full".equals(gridPosition) || "bottom_full".equals(gridPosition);
-            // 상단바~하단바 사이: 우측은 전체, 상단/하단은 런처 상·하 타일 한 줄(절반)만 사용
-            int barsH = Math.max(1, gdm.heightPixels - insetTop() - insetBottom());
-            lp.width = fullWidth ? gdm.widthPixels : Math.round(GRID_TILE_W_DP * density);
-            if ("right".equals(gridPosition)) {
-                lp.height = barsH;
-            } else if (fullWidth) {
-                lp.height = Math.max(1, (barsH - Math.round(GRID_TILE_GAP_DP * density)) / 2);
-            } else {
-                lp.height = Math.round(GRID_TILE_H_DP * density);
-            }
+            // 런처 우측 2x2 타일 기준: 상단/하단은 같은 줄의 타일 두 개(+사이 간격)를 합친 폭
+            boolean tileRow = "top_full".equals(gridPosition) || "bottom_full".equals(gridPosition);
+            int tileW = Math.round((tileRow ? 2 * GRID_TILE_W_DP + GRID_TILE_GAP_DP : GRID_TILE_W_DP) * density);
+            lp.width = Math.min(gdm.widthPixels, tileW);
+            lp.height = "right".equals(gridPosition)
+                    ? Math.max(1, gdm.heightPixels - insetTop() - insetBottom())
+                    : Math.round(GRID_TILE_H_DP * density);
             bar.setPadding(0, 0, 0, 0);
             // 셀 크기에 맞춰 위젯 스케일을 산출 → 슬라이더(SCALE) 대신 타일/격자 기준
             int gc = Math.max(1, Math.min(6, sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID)));
@@ -362,7 +358,7 @@ public class OverlayService extends Service {
             float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
             SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
             // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용,
-            // 상단/하단은 좌우 타일 두 개를 합친 폭을 사용
+            // 상단/하단은 위·아래 줄 타일 두 개를 합친 영역을 사용
             lp.x = gdm.widthPixels - lp.width;
             if ("bottom".equals(gridPosition) || "bottom_full".equals(gridPosition)) {
                 lp.y = gdm.heightPixels - insetBottom() - lp.height;
