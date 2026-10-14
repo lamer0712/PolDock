@@ -25,7 +25,7 @@ public class UpdateActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("PolDock 업데이트")
                 .setMessage(version + " 버전을 다운로드할까요?\n\n"
-                        + "다운로드가 끝나면 설치 화면이나 다운로드 폴더가 자동으로 열립니다.")
+                        + "APK는 다운로드 폴더에 저장되며, 파일 관리자에서 눌러 설치합니다.")
                 .setPositiveButton("다운로드", (dialog, which) -> requestDownload())
                 .setNegativeButton("취소", (dialog, which) -> finish())
                 .setOnCancelListener(dialog -> finish())

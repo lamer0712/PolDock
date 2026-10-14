@@ -47,14 +47,11 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         }
 
         clearDownload(prefs);
+        // 차량은 PolDock을 설치 출처로 허용할 방법이 없어 화면을 자동으로 띄우지 않고 다운로드만 한다.
+        // 알림을 누르면 설치 화면(허용된 경우) 또는 다운로드 폴더가 열린다.
         Intent install = UpdateManager.installOrBrowseIntent(context, completedId);
         UpdateManager.notifyResult(context, "PolDock 다운로드 완료",
-                "눌러서 업데이트를 설치하세요.", install);
-        try {
-            context.startActivity(install);
-        } catch (RuntimeException ignored) {
-            // Background activity launch can be blocked; the notification remains available.
-        }
+                "다운로드 폴더의 PolDock APK를 파일 관리자에서 눌러 설치하세요.", install);
     }
 
     private static boolean downloadSucceeded(DownloadManager manager, long id) {
