@@ -1,5 +1,6 @@
 package com.oemtools.poldock;
 
+import android.Manifest;
 import android.app.DownloadManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -9,6 +10,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -40,18 +42,36 @@ final class UpdateManager {
     static final String KEY_DOWNLOAD_PATH = "ota_download_path";
     static final String KEY_DOWNLOAD_VERSION = "ota_download_version";
     static final String KEY_UPDATE_AVAILABLE = "ota_update_available";
+    static final String KEY_LAST_CHECK = "ota_last_check";
 
     private static final String TAG = "PolDockUpdate";
     private static final String CHANNEL = "poldock_updates";
     private static final int AVAILABLE_NOTIFICATION = 2401;
     private static final int RESULT_NOTIFICATION = 2402;
     private static final AtomicBoolean CHECKING = new AtomicBoolean(false);
+    private static final long CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000;
 
     private UpdateManager() {
     }
 
     static void prepareNotifications(Context context) {
         ensureChannel(context);
+    }
+
+    static boolean canNotify(Context context) {
+        return Build.VERSION.SDK_INT < 33
+                || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** 자동 실행 경로용: 마지막 성공 검사 후 하루가 지났을 때만 검사한다. */
+    static void checkForUpdateIfDue(Context context) {
+        long last = prefs(context).getLong(KEY_LAST_CHECK, 0L);
+        long elapsed = System.currentTimeMillis() - last;
+        if (last > 0 && elapsed >= 0 && elapsed < CHECK_INTERVAL_MS) return;
+        if (!canNotify(context)) return;
+        prepareNotifications(context);
+        checkForUpdate(context);
     }
 
     static void checkForUpdate(Context context) {
@@ -63,6 +83,7 @@ final class UpdateManager {
         new Thread(() -> {
             try {
                 Release release = fetchLatestRelease(app, repository);
+                prefs(app).edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply();
                 if (release != null) {
                     boolean available = compareVersions(
                             release.version, BuildConfig.VERSION_NAME) > 0;

@@ -39,9 +39,7 @@ public class LaunchActivity extends Activity {
 
         SharedPreferences sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
         UpdateManager.prepareNotifications(this);
-        if (Build.VERSION.SDK_INT < 33
-                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                == PackageManager.PERMISSION_GRANTED) {
+        if (UpdateManager.canNotify(this)) {
             UpdateManager.checkForUpdate(this);
         }
         continueOnboarding(sp);

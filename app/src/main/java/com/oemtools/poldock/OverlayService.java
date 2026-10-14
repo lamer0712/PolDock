@@ -134,6 +134,9 @@ public class OverlayService extends Service {
     private WindowManager.LayoutParams lp;
     private SharedPreferences sp;
     private final Handler ui = new Handler(Looper.getMainLooper());
+    /** 시동 직후에는 네트워크가 늦게 붙으므로 잠시 뒤 OTA를 확인한다. */
+    private static final long UPDATE_CHECK_DELAY_MS = 60_000L;
+    private final Runnable updateCheck = () -> UpdateManager.checkForUpdateIfDue(this);
 
     private VehicleInfo vehicle;
     private EfficiencyTracker efficiencyTracker;
@@ -270,6 +273,7 @@ public class OverlayService extends Service {
         startShortcutAddedTracking();
         installDock();
         sp.registerOnSharedPreferenceChangeListener(prefListener);
+        ui.postDelayed(updateCheck, UPDATE_CHECK_DELAY_MS);
     }
 
     @Override
@@ -2252,6 +2256,7 @@ public class OverlayService extends Service {
     public void onDestroy() {
         super.onDestroy();
         isRunning = false;
+        ui.removeCallbacks(updateCheck);
         ui.removeCallbacks(clockTick);
         ui.removeCallbacks(envTick);
         ui.removeCallbacks(musicTick);
