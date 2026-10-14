@@ -217,9 +217,10 @@ final class UpdateManager {
         }
 
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url))
-                .setTitle("PolDock " + version)
-                .setDescription("업데이트 APK 다운로드 중")
-                .setMimeType("application/octet-stream")
+                // 다운로드 폴더 선택기는 title을 파일명처럼 보여주므로 확장자까지 포함한다.
+                .setTitle(target.getName())
+                .setDescription("PolDock " + version + " 업데이트 다운로드 중")
+                .setMimeType("application/vnd.android.package-archive")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,
                         target.getName());
