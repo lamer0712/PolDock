@@ -357,13 +357,15 @@ public class EditPanel {
         if ("g".equals(ori)) {
             int cols = sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID);
             int rows = sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
-            // 위치: 우상단 / 상하 통합 / 우하단 (드래그 불가, 여기서 선택)
+            // 위치: 상단 / 우상단 / 우측 / 우하단 / 하단 (드래그 불가, 여기서 선택)
             String gpos = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
             tabContent.addView(Ui.fieldLabel(c, "위치"));
             tabContent.addView(Ui.rowGap(c,
+                    gridPositionOption("상단", "top_full", gpos),
                     gridPositionOption("우상단", "top", gpos),
-                    gridPositionOption("우측 전체", "right", gpos),
-                    gridPositionOption("우하단", "bottom", gpos)));
+                    gridPositionOption("우측", "right", gpos),
+                    gridPositionOption("우하단", "bottom", gpos),
+                    gridPositionOption("하단", "bottom_full", gpos)));
             tabContent.addView(Ui.fieldLabel(c, "배치"));
             tabContent.addView(gridStepper(c, "행", ShortcutStore.KEY_GRID_R, rows));
             tabContent.addView(gridStepper(c, "열", ShortcutStore.KEY_GRID_C, cols));

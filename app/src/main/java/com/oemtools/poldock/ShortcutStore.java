@@ -50,7 +50,7 @@ public class ShortcutStore {
     static final String KEY_GRID_C = "grid_cols";          // 그리드 열
     static final String KEY_GRID_R = "grid_rows";          // 그리드 행
     static final int DEFAULT_GRID = 3;
-    static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top/right/bottom
+    static final String KEY_GRID_POS = "grid_pos";         // 그리드 위치: top_full/top/right/bottom/bottom_full
     static final String KEY_GRID_BG_MODE = "grid_bg_mode"; // default/color/photo
     static final String KEY_GRID_BG_COLOR = "grid_bg_color";
     static final String KEY_GRID_PHOTO_SIZE = "grid_photo_size";       // fit/fill/original

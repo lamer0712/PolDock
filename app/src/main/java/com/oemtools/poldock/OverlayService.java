@@ -339,7 +339,8 @@ public class OverlayService extends Service {
             float density = getResources().getDisplayMetrics().density;
             DisplayMetrics gdm = realMetrics();
             String gridPosition = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
-            lp.width = Math.round(GRID_TILE_W_DP * density);
+            boolean fullWidth = "top_full".equals(gridPosition) || "bottom_full".equals(gridPosition);
+            lp.width = fullWidth ? gdm.widthPixels : Math.round(GRID_TILE_W_DP * density);
             lp.height = "right".equals(gridPosition)
                     ? Math.max(1, gdm.heightPixels - insetTop() - insetBottom())
                     : Math.round(GRID_TILE_H_DP * density);
@@ -353,9 +354,10 @@ public class OverlayService extends Service {
             SCALE = tilePx / (TILE_DP * density);
             float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
             SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
-            // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용
+            // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용,
+            // 상단/하단은 화면 폭 전체를 사용
             lp.x = gdm.widthPixels - lp.width;
-            if ("bottom".equals(gridPosition)) {
+            if ("bottom".equals(gridPosition) || "bottom_full".equals(gridPosition)) {
                 lp.y = gdm.heightPixels - insetBottom() - lp.height;
             } else if ("right".equals(gridPosition)) {
                 lp.y = insetTop();

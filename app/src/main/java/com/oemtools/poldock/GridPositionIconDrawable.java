@@ -7,7 +7,7 @@ import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 
-/** 화면 오른쪽에서 그리드 독이 차지하는 영역을 보여주는 아이콘. */
+/** 화면에서 그리드 독이 차지하는 영역을 보여주는 아이콘. */
 final class GridPositionIconDrawable extends Drawable {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final String position;
@@ -33,11 +33,19 @@ final class GridPositionIconDrawable extends Drawable {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(1f, 1.6f * unit));
         canvas.drawRoundRect(left, top, right, bottom, 2f * unit, 2f * unit, paint);
-        canvas.drawLine(centerX, top, centerX, bottom, paint);
+        boolean topFull = "top_full".equals(position);
+        boolean bottomFull = "bottom_full".equals(position);
+        canvas.drawLine(centerX, topFull ? middle : top, centerX, bottomFull ? middle : bottom, paint);
         canvas.drawLine(left, middle, "right".equals(position) ? centerX : right, middle, paint);
 
         paint.setStyle(Paint.Style.FILL);
-        if ("top".equals(position)) {
+        if (topFull) {
+            canvas.drawRoundRect(left + inset, top + inset, right - inset, middle - inset,
+                    unit, unit, paint);
+        } else if (bottomFull) {
+            canvas.drawRoundRect(left + inset, middle + inset, right - inset, bottom - inset,
+                    unit, unit, paint);
+        } else if ("top".equals(position)) {
             canvas.drawRoundRect(dockLeft, top + inset, right - inset, middle - inset,
                     unit, unit, paint);
         } else if ("bottom".equals(position)) {
