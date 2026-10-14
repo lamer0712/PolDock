@@ -8,7 +8,14 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
@@ -415,7 +422,11 @@ public class OverlayService extends Service {
         DisplayMetrics dm = realMetrics();
         if (grid) {
             shortcutRow = null;
-            for (Shortcut s : ShortcutStore.load(this)) items.add(makeItem(s, false));
+            for (Shortcut s : ShortcutStore.load(this)) {
+                View v = makeItem(s, false);
+                v.setPadding(0, 0, 0, 0);   // 셀이 타일 크기로 고정되므로 패딩이 아이콘 가장자리를 잘라낸다
+                items.add(v);
+            }
             int cols = Math.max(1, Math.min(6, sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID)));
             int rows = Math.max(1, Math.min(8, sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID)));
             int perPage = Math.max(1, cols * rows);
@@ -1645,6 +1656,8 @@ public class OverlayService extends Service {
                 if (vehicleShortcut && !"ic_car".equals(s.iconRes)) {
                     iv.setColorFilter(wFg());
                 }
+            } else {
+                iv.setImageDrawable(roundVisibleCorners(icon, side));
             }
             item.addView(iv, new LinearLayout.LayoutParams(side, side));
         } else {
@@ -1668,6 +1681,34 @@ public class OverlayService extends Service {
         item.setLayoutParams(lp);
         item.setOnClickListener(v -> launch(s));
         return item;
+    }
+
+    /** 아이콘의 보이는 영역(투명 여백 제외) 모서리만 둥글게 깎는다. 크기·위치는 그대로 둔다. */
+    private Drawable roundVisibleCorners(Drawable icon, int size) {
+        if (size <= 0) return icon;
+        Bitmap src = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        icon.setBounds(0, 0, size, size);
+        icon.draw(new Canvas(src));
+        int[] px = new int[size * size];
+        src.getPixels(px, 0, size, 0, 0, size, size);
+        int left = size, top = size, right = -1, bottom = -1;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                if ((px[y * size + x] >>> 24) < 16) continue;
+                if (x < left) left = x;
+                if (x > right) right = x;
+                if (y < top) top = y;
+                if (y > bottom) bottom = y;
+            }
+        }
+        if (right < left || bottom < top) return icon;
+        RectF r = new RectF(left, top, right + 1, bottom + 1);
+        float radius = Math.min(r.width(), r.height()) * CalendarTile.CORNER_RATIO;
+        Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        paint.setShader(new BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+        new Canvas(out).drawRoundRect(r, radius, radius, paint);
+        return new BitmapDrawable(getResources(), out);
     }
 
     private boolean isOemAppShortcut(Shortcut s) {
