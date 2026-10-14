@@ -301,10 +301,14 @@ public class EditPanel {
             updateLp.rightMargin = Ui.dp(c, 6);
             header.addView(update, updateLp);
         }
-        TextView close = Ui.chip(c, "×", Ui.GREY, v -> hide());
-        close.setTextSize(24);
+        // 닫기: 업데이트 아이콘과 같은 48dp 정사각형, 대문자 X를 정중앙에
+        TextView close = Ui.chip(c, "X", Ui.GREY, v -> hide());
+        close.setTextSize(22);
+        close.setPadding(0, 0, 0, 0);
+        close.setIncludeFontPadding(false);
+        close.setGravity(Gravity.CENTER);
         close.setContentDescription("닫기");
-        header.addView(close);
+        header.addView(close, new LinearLayout.LayoutParams(Ui.dp(c, 48), Ui.dp(c, 48)));
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hlp.bottomMargin = Ui.dp(c, 10);
