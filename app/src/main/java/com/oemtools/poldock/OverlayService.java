@@ -1631,6 +1631,21 @@ public class OverlayService extends Service {
         if (icon != null) {
             ImageView iv = new ImageView(this);
             iv.setImageDrawable(icon);
+            boolean settingsResource = ShortcutStore.SETTINGS_PKG.equals(s.iconPkg);
+            boolean oemAppShortcut = isOemAppShortcut(s);
+            boolean vehicleShortcut = settingsResource && !oemAppShortcut;
+            if (vehicleShortcut || oemAppShortcut) {
+                int inset = Math.round(side * (oemAppShortcut ? 0.15f : 0.25f));
+                iv.setPadding(inset, inset, inset, inset);
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(oemAppShortcut ? 0xFFF7EA48 : wBg());
+                bg.setCornerRadius(side * CalendarTile.CORNER_RATIO);
+                iv.setBackground(bg);
+                if (vehicleShortcut && !"ic_car".equals(s.iconRes)) {
+                    iv.setColorFilter(wFg());
+                }
+            }
             item.addView(iv, new LinearLayout.LayoutParams(side, side));
         } else {
             TextView t = new TextView(this);
@@ -1653,6 +1668,20 @@ public class OverlayService extends Service {
         item.setLayoutParams(lp);
         item.setOnClickListener(v -> launch(s));
         return item;
+    }
+
+    private boolean isOemAppShortcut(Shortcut s) {
+        if (s.iconRes.startsWith("ic_app_") || s.iconRes.startsWith("ic_launcher_app_")) {
+            return true;
+        }
+        android.content.ComponentName component =
+                android.content.ComponentName.unflattenFromString(s.component);
+        if (component == null
+                || !ShortcutStore.SETTINGS_PKG.equals(component.getPackageName())) return false;
+        String cls = component.getClassName();
+        return "android.settings.AMBIENCE".equals(cls)
+                || "ecarx.settings.carstatus.ui.activity.CarStatusActivity".equals(cls)
+                || "ecarx.settings.carstatus.ui.activity.TripMeterActivity".equals(cls);
     }
 
     private void launch(Shortcut s) {

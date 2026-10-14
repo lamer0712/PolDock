@@ -193,8 +193,6 @@ public class ShortcutStore {
     static List<Shortcut> presets() {
         List<Shortcut> l = new ArrayList<>();
         String S = SETTINGS_PKG;
-        l.add(new Shortcut("홈", "android.intent.action.MAIN",
-                "android.intent.category.HOME", "", "", "s", "").icon(S, "ic_car"));
         l.add(new Shortcut("미러 접기", "ecarx.intent.action.SUB_SETTINGS", "",
                 "sub_fragment_id", "0x7f0b03b6", "i", "").icon(S, "ic_fav_fold_mirror_48"));
         l.add(new Shortcut("성에제거 미러", "ecarx.intent.action.SUB_SETTINGS", "",
