@@ -47,11 +47,11 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         }
 
         clearDownload(prefs);
-        Intent explorer = UpdateManager.fileExplorerIntent();
+        Intent install = UpdateManager.installOrBrowseIntent(context, completedId);
         UpdateManager.notifyResult(context, "PolDock 다운로드 완료",
-                "눌러서 다운로드 폴더를 열어 설치하세요.", explorer);
+                "눌러서 업데이트를 설치하세요.", install);
         try {
-            context.startActivity(explorer);
+            context.startActivity(install);
         } catch (RuntimeException ignored) {
             // Background activity launch can be blocked; the notification remains available.
         }

@@ -14,6 +14,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.DocumentsContract;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -220,7 +221,7 @@ final class UpdateManager {
                 // 다운로드 폴더 선택기는 title을 파일명처럼 보여주므로 확장자까지 포함한다.
                 .setTitle(target.getName())
                 .setDescription("PolDock " + version + " 업데이트 다운로드 중")
-                .setMimeType("application/vnd.android.package-archive")
+                .setMimeType(APK_MIME)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,
                         target.getName());
@@ -253,10 +254,65 @@ final class UpdateManager {
         notificationManager(context).notify(RESULT_NOTIFICATION, builder.build());
     }
 
+    static final String APK_MIME = "application/vnd.android.package-archive";
+    private static final String DOWNLOADS_AUTHORITY = "com.android.providers.downloads.documents";
+
+    /**
+     * 다운로드 완료 후 열 화면. PolDock이 설치 출처로 허용돼 있으면 설치 화면을 바로 띄우고,
+     * 아니면 다운로드 폴더를 파일 관리자(탐색) 모드로 연다. 차량 설정에는 출처 허용 화면이
+     * 없어 설치 화면을 바로 띄우면 막히지만, 파일 관리자에서 누르면 정상 설치된다.
+     * 선택기(OPEN_DOCUMENT)는 고른 결과를 받을 곳이 없어 마지막 수단으로만 쓴다.
+     */
+    static Intent installOrBrowseIntent(Context context, long downloadId) {
+        DownloadManager manager = (DownloadManager) context.getSystemService(
+                Context.DOWNLOAD_SERVICE);
+        Uri apk = manager == null ? null : manager.getUriForDownloadedFile(downloadId);
+        if (apk != null && canInstallDirectly(context)) {
+            Intent install = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(apk, APK_MIME)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (resolves(context, install)) return install;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            Intent browse = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(DocumentsContract.buildRootUri(DOWNLOADS_AUTHORITY, "downloads"),
+                            DocumentsContract.Root.MIME_TYPE_ITEM)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (resolves(context, browse)) return browse;
+        }
+        return fileExplorerIntent();
+    }
+
+    /**
+     * 설치 화면이 PolDock을 출처로 받아줄지 확인한다. targetSdk 22라 canRequestPackageInstalls()는
+     * 항상 false이므로, 설치 관리자가 실제로 보는 app op를 직접 확인한다.
+     */
+    private static boolean canInstallDirectly(Context context) {
+        if (Build.VERSION.SDK_INT < 26) return true;
+        try {
+            android.app.AppOpsManager ops = (android.app.AppOpsManager)
+                    context.getSystemService(Context.APP_OPS_SERVICE);
+            if (ops == null) return false;
+            int uid = android.os.Process.myUid();
+            String op = "android:request_install_packages";
+            int mode = Build.VERSION.SDK_INT >= 29
+                    ? ops.unsafeCheckOpNoThrow(op, uid, context.getPackageName())
+                    : ops.checkOpNoThrow(op, uid, context.getPackageName());
+            return mode == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static boolean resolves(Context context, Intent intent) {
+        return context.getPackageManager().resolveActivity(intent, 0) != null;
+    }
+
     static Intent fileExplorerIntent() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/vnd.android.package-archive")
+                .setType(APK_MIME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         if (Build.VERSION.SDK_INT >= 26) {
             intent.putExtra("android.provider.extra.INITIAL_URI", Uri.parse(
