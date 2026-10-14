@@ -1679,7 +1679,9 @@ public class OverlayService extends Service {
         if (icon != null) {
             ImageView iv = new ImageView(this);
             iv.setImageDrawable(icon);
-            boolean settingsResource = ShortcutStore.SETTINGS_PKG.equals(s.iconPkg);
+            // 설정 앱 아이콘이나 PolDock 자체 아이콘(크립 등)은 차량 바로가기 타일로 표시
+            boolean settingsResource = ShortcutStore.SETTINGS_PKG.equals(s.iconPkg)
+                    || getPackageName().equals(s.iconPkg);
             boolean oemAppShortcut = isOemAppShortcut(s);
             boolean vehicleShortcut = settingsResource && !oemAppShortcut;
             if (vehicleShortcut || oemAppShortcut) {

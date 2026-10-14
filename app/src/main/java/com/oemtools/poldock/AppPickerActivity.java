@@ -42,6 +42,8 @@ public class AppPickerActivity extends Activity {
             "ecarx.settings.ui.activity.CarSettingsTabActivity";
     private static final String SECONDARY_SETTINGS_ACTIVITY =
             "ecarx.settings.ui.activity.CarSettingSecondaryModuleActivity";
+    private static final String SUB_SETTINGS_ACTIVITY =
+            "ecarx.settings.ui.activity.SubSettingsActivity";
 
     // com.ecarx.car.launcher 2.21.2의 app-grid 제외 목록.
     private static final Set<String> OEM_IGNORED_PACKAGES = new HashSet<>(Arrays.asList(
@@ -84,6 +86,11 @@ public class AppPickerActivity extends Activity {
         final boolean mediaService;
         final String action;
         final String shortcutIconRes;
+        // 설정 하위 화면 지정용 extra, 아이콘 패키지 (비어 있으면 기본값 사용)
+        String extraKey = "";
+        String extraValue = "";
+        String extraType = "s";
+        String iconPkg = "";
 
         AppCandidate(String name, String pkg, String component, Drawable icon,
                      boolean mediaService) {
@@ -171,6 +178,7 @@ public class AppPickerActivity extends Activity {
                 "android.settings.INTERIOR_LIGHT", "ic_fav_interior_lights_48");
         addSettingsCandidate(result, pm, "외부 조명", SETTINGS_ACTIVITY,
                 "android.settings.EXTERIOR_LIGHT", "ic_fav_exterior_lights_blades_48");
+        addCreepCandidate(result, pm);
 
         Collections.sort(result, (x, y) -> x.name.compareToIgnoreCase(y.name));
         return result;
@@ -219,6 +227,29 @@ public class AppPickerActivity extends Activity {
                     component.flattenToString(), packageDrawable(SETTINGS_PACKAGE, iconRes),
                     false, action, iconRes));
         } catch (PackageManager.NameNotFoundException ignored) {
+        }
+    }
+
+    /**
+     * 크립 설정 화면. 설정 앱의 SubSettingsActivity가 sub_fragment_id(내비게이션 id)로
+     * CreepDetailsFragment를 연다. id는 차량 소프트웨어 버전마다 바뀔 수 있어 이름으로 찾는다.
+     */
+    private void addCreepCandidate(List<AppCandidate> result, PackageManager pm) {
+        ComponentName component = new ComponentName(SETTINGS_PACKAGE, SUB_SETTINGS_ACTIVITY);
+        try {
+            pm.getActivityInfo(component, 0);
+            int id = createPackageContext(SETTINGS_PACKAGE, 0).getResources()
+                    .getIdentifier("navi_creep", "id", SETTINGS_PACKAGE);
+            if (id == 0) return;
+            AppCandidate creep = new AppCandidate("크립", SETTINGS_PACKAGE,
+                    component.flattenToString(), getDrawable(R.drawable.ic_shortcut_creep),
+                    false, "ecarx.intent.action.SUB_SETTINGS", "ic_shortcut_creep");
+            creep.extraKey = "sub_fragment_id";
+            creep.extraValue = "0x" + Integer.toHexString(id);
+            creep.extraType = "i";
+            creep.iconPkg = getPackageName();
+            result.add(creep);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -271,10 +302,13 @@ public class AppPickerActivity extends Activity {
                     app.component, "s", "");
             s.iconPkg = app.pkg;
         } else if (!TextUtils.isEmpty(app.action)) {
-            s = new Shortcut(app.name, app.action, "", "PARAM",
-                    "INTENT_SETTINGS", "s", app.pkg);
+            boolean subScreen = !TextUtils.isEmpty(app.extraKey);
+            s = new Shortcut(app.name, app.action, "",
+                    subScreen ? app.extraKey : "PARAM",
+                    subScreen ? app.extraValue : "INTENT_SETTINGS",
+                    subScreen ? app.extraType : "s", app.pkg);
             s.component = app.component;
-            s.iconPkg = SETTINGS_PACKAGE;
+            s.iconPkg = TextUtils.isEmpty(app.iconPkg) ? SETTINGS_PACKAGE : app.iconPkg;
             s.iconRes = app.shortcutIconRes;
         } else {
             s = new Shortcut(app.name, "", "", "", "", "s", app.pkg);

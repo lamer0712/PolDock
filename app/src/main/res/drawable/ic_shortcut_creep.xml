@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 크립 바로가기: 차량 뒷모습 + 앞으로 천천히 나아가는 화살표 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 내용(x 10~38, y 11~46)을 다른 차량 아이콘처럼 상자를 채우도록 키움 -->
+    <group
+        android:pivotX="24"
+        android:pivotY="28.5"
+        android:scaleX="1.2"
+        android:scaleY="1.2"
+        android:translateY="-4.5">
+        <path
+            android:pathData="M14,20 L17,11 L31,11 L34,20 M10,20 H38 V28 H10 Z M13,28 V32 M35,28 V32"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M18,40 L24,35 L30,40 M18,46 L24,41 L30,46"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="2.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>
