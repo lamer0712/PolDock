@@ -357,7 +357,9 @@ public class EditPanel {
                 Ui.tab(c, "세로", "v".equals(ori),
                         v -> sp.edit().putString(oriKeyE(), "v").apply()),
                 Ui.tab(c, "그리드", "g".equals(ori),
-                        v -> sp.edit().putString(oriKeyE(), "g").apply())));
+                        v -> sp.edit().putString(oriKeyE(), "g").apply()),
+                Ui.tab(c, "꺼짐", OverlayService.ORI_OFF.equals(ori),
+                        v -> sp.edit().putString(oriKeyE(), OverlayService.ORI_OFF).apply())));
         LinearLayout tabContent = Ui.tabContent(c);
         screenContent.addView(tabContent);
 
@@ -385,6 +387,10 @@ public class EditPanel {
             tabContent.addView(gridStepper(c, "행", ShortcutStore.KEY_GRID_R, rows));
             tabContent.addView(gridStepper(c, "열", ShortcutStore.KEY_GRID_C, cols));
             addGridBackgroundControls(tabContent);
+        } else if (OverlayService.ORI_OFF.equals(ori)) {
+            tabContent.addView(Ui.fieldLabel(c,
+                    "이 화면에서는 독을 표시하지 않습니다.\n"
+                            + "독이 없을 때 PolDock 앱 아이콘을 누르면 이 편집 화면이 열립니다."));
         } else {
             int pct = sp.getInt(scaleKeyE(), ShortcutStore.DEFAULT_SCALE);
             final TextView sizeLabel = Ui.fieldLabel(c, "독 크기: " + pct + "%");
@@ -410,8 +416,8 @@ public class EditPanel {
             tabContent.addView(seek, lp);
         }
 
-        // 투명도 (가로/세로 전용 — 그리드는 항상 불투명 고정)
-        if ("g".equals(ori)) {
+        // 투명도 (가로/세로 전용 — 그리드는 항상 불투명 고정, 꺼짐은 해당 없음)
+        if ("g".equals(ori) || OverlayService.ORI_OFF.equals(ori)) {
             return card;
         }
         int apct = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);

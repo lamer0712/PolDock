@@ -9,7 +9,6 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.widget.Toast;
 
 /**
  * 런처 진입점. 앱을 실행하면 설정 화면 대신 독을 띄운다.
@@ -28,9 +27,7 @@ public class LaunchActivity extends Activity {
 
         // 독 띄우기 (오버레이 권한 없으면 설정 화면으로)
         if (OverlayService.canOverlay(this)) {
-            OverlayService.start(this);
-            Toast.makeText(this, "독을 띄웠습니다 · 손잡이(≡) 더블탭으로 설정",
-                    Toast.LENGTH_SHORT).show();
+            OverlayService.startFromLauncher(this);   // 안내 토스트/편집 패널은 서비스가 처리
         } else {
             startActivity(new Intent(this, MainActivity.class));
             finish();

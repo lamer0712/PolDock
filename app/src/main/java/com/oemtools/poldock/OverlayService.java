@@ -61,6 +61,8 @@ public class OverlayService extends Service {
     private static final String KEY_X = "x";
     private static final String KEY_Y = "y";
     static final String KEY_ORI = "dock_ori";
+    static final String ORI_OFF = "off";   // 꺼짐: 해당 화면에서 독을 표시하지 않음
+    static final String EXTRA_FROM_LAUNCHER = "from_launcher";
     private static final String ECARX_DISPLAY_AREA_STATE = "com.ecarx.displayarea.STATE";
     private static final String ECARX_DISPLAY_AREA_UPDATE =
             "com.ecarx.displayarea.core.STATE_COMPONENT_UPDATE";
@@ -279,7 +281,29 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && intent.getBooleanExtra(EXTRA_FROM_LAUNCHER, false)) {
+            // 앱 아이콘으로 실행: 독이 꺼져 있으면 손잡이가 없으므로 편집 패널을 바로 연다
+            if (dock == null) {
+                openApp();
+            } else {
+                Toast.makeText(this, "독을 띄웠습니다 · 손잡이(≡) 더블탭으로 설정",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }
         return START_STICKY;
+    }
+
+    private void removeDock() {
+        if (dock != null) {
+            try {
+                wm.removeView(dock);
+            } catch (Exception ignored) {
+            }
+        }
+        dock = null;
+        barBg = null;
+        shortcutRow = null;
+        gridActive = false;
     }
 
     private boolean isVertical() {
@@ -306,6 +330,10 @@ public class OverlayService extends Service {
         vehValues.clear();
         captureDockScroll();
         mode = activeMode();
+        if (ORI_OFF.equals(sp.getString(mk(KEY_ORI), "h"))) {
+            removeDock();   // 꺼짐: 보이지 않는 창이 터치를 막지 않도록 창 자체를 없앤다
+            return;
+        }
         lp.x = sp.getInt(mk(KEY_X), d(24));
         lp.y = sp.getInt(mk(KEY_Y), d(60));
         int pct = sp.getInt(mk(ShortcutStore.KEY_SCALE), ShortcutStore.DEFAULT_SCALE);
@@ -2292,7 +2320,15 @@ public class OverlayService extends Service {
 
     /** 중지된 독도 차량 런처에서 다시 누르면 확실히 되살린다. */
     static void start(Context ctx) {
-        Intent intent = new Intent(ctx, OverlayService.class);
+        start(ctx, new Intent(ctx, OverlayService.class));
+    }
+
+    /** 앱 아이콘에서 실행: 독이 꺼져 있으면 편집 패널을 연다. */
+    static void startFromLauncher(Context ctx) {
+        start(ctx, new Intent(ctx, OverlayService.class).putExtra(EXTRA_FROM_LAUNCHER, true));
+    }
+
+    private static void start(Context ctx, Intent intent) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ctx.startForegroundService(intent);

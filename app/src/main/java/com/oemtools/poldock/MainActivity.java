@@ -164,7 +164,8 @@ public class MainActivity extends Activity {
         if (sizeLabel != null) sizeLabel.setText("독 크기: " + pct + "%");
         if (oriBtn != null) {
             String o = prefs().getString(oriKeyE(), "h");
-            oriBtn.setText("배치: " + ("v".equals(o) ? "세로" : "g".equals(o) ? "그리드" : "가로"));
+            oriBtn.setText("배치: " + ("v".equals(o) ? "세로" : "g".equals(o) ? "그리드"
+                    : OverlayService.ORI_OFF.equals(o) ? "꺼짐" : "가로"));
             if (gridLabel != null) {
                 int cols = prefs().getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID);
                 int rows = prefs().getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
@@ -377,7 +378,8 @@ public class MainActivity extends Activity {
 
     private void toggleOrientation() {
         String cur = prefs().getString(oriKeyE(), "h");
-        String next = "h".equals(cur) ? "v" : "v".equals(cur) ? "g" : "h";
+        String next = "h".equals(cur) ? "v" : "v".equals(cur) ? "g"
+                : "g".equals(cur) ? OverlayService.ORI_OFF : "h";
         prefs().edit().putString(oriKeyE(), next).apply();
         refreshDockControls();
     }
