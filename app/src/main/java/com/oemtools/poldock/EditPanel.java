@@ -34,6 +34,9 @@ import java.util.List;
  */
 public class EditPanel {
 
+    /** 그리드 위치 상단/하단(런처 타일 한 줄) 버튼 노출 여부 — 나중에 쓰려고 숨겨 둠. */
+    private static final boolean SHOW_TILE_ROW_POSITIONS = false;
+
     private final OverlayService svc;
     private final WindowManager wm;
     private final SharedPreferences sp;
@@ -357,15 +360,23 @@ public class EditPanel {
         if ("g".equals(ori)) {
             int cols = sp.getInt(ShortcutStore.KEY_GRID_C, ShortcutStore.DEFAULT_GRID);
             int rows = sp.getInt(ShortcutStore.KEY_GRID_R, ShortcutStore.DEFAULT_GRID);
-            // 위치: 상단 / 우상단 / 우측 / 우하단 / 하단 (드래그 불가, 여기서 선택)
+            // 위치: (상단) / 우상단 / 우측 / 우하단 / (하단) (드래그 불가, 여기서 선택)
             String gpos = sp.getString(ShortcutStore.KEY_GRID_POS, "top");
+            // 숨김 상태여도 이미 상단/하단을 쓰는 중이면 선택 상태가 보이도록 노출
+            boolean rowPositions = SHOW_TILE_ROW_POSITIONS
+                    || "top_full".equals(gpos) || "bottom_full".equals(gpos);
             tabContent.addView(Ui.fieldLabel(c, "위치"));
-            tabContent.addView(Ui.rowGap(c,
-                    gridPositionOption("상단", "top_full", gpos),
-                    gridPositionOption("우상단", "top", gpos),
-                    gridPositionOption("우측", "right", gpos),
-                    gridPositionOption("우하단", "bottom", gpos),
-                    gridPositionOption("하단", "bottom_full", gpos)));
+            tabContent.addView(rowPositions
+                    ? Ui.rowGap(c,
+                            gridPositionOption("상단", "top_full", gpos),
+                            gridPositionOption("우상단", "top", gpos),
+                            gridPositionOption("우측", "right", gpos),
+                            gridPositionOption("우하단", "bottom", gpos),
+                            gridPositionOption("하단", "bottom_full", gpos))
+                    : Ui.rowGap(c,
+                            gridPositionOption("우상단", "top", gpos),
+                            gridPositionOption("우측", "right", gpos),
+                            gridPositionOption("우하단", "bottom", gpos)));
             tabContent.addView(Ui.fieldLabel(c, "배치"));
             tabContent.addView(gridStepper(c, "행", ShortcutStore.KEY_GRID_R, rows));
             tabContent.addView(gridStepper(c, "열", ShortcutStore.KEY_GRID_C, cols));
