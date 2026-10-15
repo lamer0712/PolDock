@@ -764,16 +764,21 @@ public class OverlayService extends Service {
         date.setGravity(Gravity.CENTER);
         dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
         dateDay = valueText(side);                              // 날짜 (아래, 값)
-        // 공휴일 이름 (숫자 아래, 요일보다 작은 글씨, 기본색). 레이아웃은 유지하고 한 줄만 추가.
+        date.addView(dateWeekday);
+        date.addView(dateDay);
+        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+
+        // 공휴일 이름: 요일+숫자 위치는 그대로 두고 타일 하단에 겹쳐 표시(작은 글씨, 기본색).
         dateHolidayName = tileText(side * 0.15f, wLabel(), false);
         dateHolidayName.setMaxLines(1);                 // 두 줄로 넘기지 않음
         dateHolidayName.setSingleLine(true);
         dateHolidayName.setEllipsize(android.text.TextUtils.TruncateAt.END);
         dateHolidayName.setVisibility(View.GONE);
-        date.addView(dateWeekday);
-        date.addView(dateDay);
-        date.addView(dateHolidayName);
-        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
+        FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(
+                side, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        nameLp.bottomMargin = Math.round(side * 0.07f);
+        tile.addView(dateHolidayName, nameLp);
 
         dateCalendarView = new MonthCalendarView(this);
         dateCalendarView.setColors(wFg(), wLabel(), Ui.ACCENT);
@@ -792,6 +797,8 @@ public class OverlayService extends Service {
             sp.edit().putBoolean(ShortcutStore.KEY_DATE_CALENDAR, show).apply();
             date.setVisibility(show ? View.GONE : View.VISIBLE);
             dateCalendarView.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (show && dateHolidayName != null) dateHolidayName.setVisibility(View.GONE);
+            else updateClock();   // 날짜 뷰로 전환 시 공휴일 이름 즉시 반영
         });
 
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(side, side);
@@ -865,8 +872,9 @@ public class OverlayService extends Service {
             // 요일과 숫자에 색 규칙 적용.
             dateWeekday.setTextColor(HolidayStore.colorFor(dow, holiday, wLabel()));
             dateDay.setTextColor(HolidayStore.colorFor(dow, holiday, wFg()));
-            if (dateHolidayName != null) {   // 숫자 아래 공휴일 이름(있을 때만, 기본색)
-                String hn = HolidayStore.nameFor(this, dc);
+            if (dateHolidayName != null) {   // 하단 공휴일 이름(날짜 뷰 + 공휴일일 때만)
+                boolean calMode = sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
+                String hn = calMode ? null : HolidayStore.nameFor(this, dc);
                 if (hn != null) {
                     dateHolidayName.setText(HolidayStore.shortName(hn));
                     dateHolidayName.setVisibility(View.VISIBLE);
