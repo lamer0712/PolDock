@@ -764,9 +764,10 @@ public class OverlayService extends Service {
         date.setGravity(Gravity.CENTER);
         dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
         dateDay = valueText(side);                              // 날짜 (아래, 값)
-        // 공휴일 이름 (숫자 아래, 요일보다 작은 글씨). 기존 레이아웃은 유지하고 한 줄만 추가.
-        dateHolidayName = tileText(side * 0.15f, HolidayStore.DAY_RED, false);
-        dateHolidayName.setMaxLines(1);
+        // 공휴일 이름 (숫자 아래, 요일보다 작은 글씨, 기본색). 레이아웃은 유지하고 한 줄만 추가.
+        dateHolidayName = tileText(side * 0.15f, wLabel(), false);
+        dateHolidayName.setMaxLines(1);                 // 두 줄로 넘기지 않음
+        dateHolidayName.setSingleLine(true);
         dateHolidayName.setEllipsize(android.text.TextUtils.TruncateAt.END);
         dateHolidayName.setVisibility(View.GONE);
         date.addView(dateWeekday);
@@ -861,11 +862,14 @@ public class OverlayService extends Service {
             dc.setTime(now);
             int dow = dc.get(java.util.Calendar.DAY_OF_WEEK);
             boolean holiday = HolidayStore.isHoliday(this, dc);
-            // 요일 글씨만 색 규칙 적용(숫자는 기본색 유지).
+            // 요일과 숫자에 색 규칙 적용.
             dateWeekday.setTextColor(HolidayStore.colorFor(dow, holiday, wLabel()));
-            if (dateHolidayName != null) {   // 숫자 아래 공휴일 이름(있을 때만)
+            dateDay.setTextColor(HolidayStore.colorFor(dow, holiday, wFg()));
+            if (dateHolidayName != null) {   // 숫자 아래 공휴일 이름(있을 때만, 기본색)
                 String hn = HolidayStore.nameFor(this, dc);
                 if (hn != null) {
+                    // 대체공휴일(삼일절) 등은 간략히 "대체공휴일"로만 표시
+                    if (hn.startsWith("대체공휴일")) hn = "대체공휴일";
                     dateHolidayName.setText(hn);
                     dateHolidayName.setVisibility(View.VISIBLE);
                 } else {
