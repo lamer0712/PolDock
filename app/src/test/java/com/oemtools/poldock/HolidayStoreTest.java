@@ -13,6 +13,7 @@ public class HolidayStoreTest {
         assertEquals("대체공휴일", HolidayStore.shortName("대체공휴일(삼일절)"));
         assertEquals("대체공휴일", HolidayStore.shortName("대체공휴일(부처님오신날)"));
         assertEquals("임시공휴일", HolidayStore.shortName("임시공휴일(제21대 대통령 선거)"));
+        assertEquals("크리스마스", HolidayStore.shortName("기독탄신일"));
         assertEquals("지방선거", HolidayStore.shortName("전국동시지방선거"));
         assertEquals("국회의원선거", HolidayStore.shortName("국회의원선거일"));
     }

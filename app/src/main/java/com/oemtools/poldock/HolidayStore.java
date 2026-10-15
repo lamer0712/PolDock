@@ -213,6 +213,7 @@ final class HolidayStore {
         if (name == null) return "";
         if (name.startsWith("대체공휴일")) return "대체공휴일";
         if (name.startsWith("임시공휴일")) return "임시공휴일";
+        if ("기독탄신일".equals(name)) return "크리스마스";
         if ("전국동시지방선거".equals(name)) return "지방선거";
         if ("국회의원선거일".equals(name)) return "국회의원선거";
         return name;

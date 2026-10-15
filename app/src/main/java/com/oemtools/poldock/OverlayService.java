@@ -84,6 +84,8 @@ public class OverlayService extends Service {
     private static final int CARD_ICON_DP = 64;
     private static final int CARD_ICON_MARGIN_DP = 32;
     private static final float WIDGET_CONTENT_Y_OFFSET_RATIO = 0.01f;
+    private static final float SECONDARY_TEXT_RATIO = 0.5f;
+    private static final float DATE_SECONDARY_TEXT_RATIO = 0.44f;
     private static final float KM_TO_MILE = 0.621371f;
     // 바로가기 등 고정(라이트) 타일색
     private static final int SHORTCUT_BG = 0xFFFFFFFF;
@@ -416,15 +418,17 @@ public class OverlayService extends Service {
             SCALE = tilePx / (TILE_DP * density);
             float maxGridScale = gc == 1 && gr == 1 ? 6f : 4f;
             SCALE = Math.max(0.5f, Math.min(maxGridScale, SCALE));
-            // 그리드: 위치 고정 (드래그 불가) — 우측 통합은 상단바와 하단바 사이를 모두 사용,
-            // 상단/하단은 위·아래 줄 타일 두 개를 합친 영역을 사용
-            lp.x = gdm.widthPixels - lp.width;
-            if ("bottom".equals(gridPosition) || "bottom_full".equals(gridPosition)) {
-                lp.y = gdm.heightPixels - insetBottom() - lp.height;
-            } else if ("right".equals(gridPosition)) {
-                lp.y = insetTop();
-            } else {
-                lp.y = insetTop();   // 상단은 상태바 아래에 (너무 올라가지 않게)
+            // 홈 화면에서는 런처 타일 위치에 고정한다. 그 외 화면은 저장된 위치를 유지하며
+            // 헤더 드래그로 이동할 수 있다.
+            if (homeFgNow) {
+                lp.x = gdm.widthPixels - lp.width;
+                if ("bottom".equals(gridPosition) || "bottom_full".equals(gridPosition)) {
+                    lp.y = gdm.heightPixels - insetBottom() - lp.height;
+                } else if ("right".equals(gridPosition)) {
+                    lp.y = insetTop();
+                } else {
+                    lp.y = insetTop();   // 상단은 상태바 아래에 (너무 올라가지 않게)
+                }
             }
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
@@ -809,13 +813,18 @@ public class OverlayService extends Service {
 
     /** 클린 모드에서 텍스트 메인 뒤에 붙는 공통 보조 표시. */
     private CharSequence withCleanSuffix(String main, String suffix) {
+        return withCleanSuffix(main, suffix, SECONDARY_TEXT_RATIO);
+    }
+
+    /** 클린 모드 보조 표시 중 실제 글자 높이가 큰 문자의 크기를 별도로 맞춘다. */
+    private CharSequence withCleanSuffix(String main, String suffix, float sizeRatio) {
         if (!widgetCleanMode() || "—".equals(main) || suffix == null || suffix.isEmpty()) {
             return main;
         }
-        return withSecondarySuffix(main, suffix);
+        return withSecondarySuffix(main, suffix, sizeRatio);
     }
 
-    /** 클린 모드에서 그림 메인 오른쪽 아래에 보조 내용을 붙이는 공통 배치. */
+    /** 클린 모드에서 그림 메인 오른쪽 아래에 보조 표시를 붙이는 공통 배치. */
     private View withCleanSideContent(View main, int mainWidth, int mainHeight, View secondary) {
         if (!widgetCleanMode() || secondary == null) return main;
         LinearLayout row = new LinearLayout(this);
@@ -825,8 +834,18 @@ public class OverlayService extends Service {
         LinearLayout.LayoutParams secondaryLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         secondaryLp.gravity = Gravity.BOTTOM;
+        secondaryLp.bottomMargin = Math.round(mainHeight * 0.05f);
         row.addView(secondary, secondaryLp);
         return row;
+    }
+
+    /** 메인 값 글씨의 50% 크기와 보조색을 쓰는 공통 보조 표시. */
+    private TextView secondaryText(int side) {
+        // 텍스트 suffix는 굵은 메인 TextView의 서체를 상속하므로 그림 옆 표시도 동일하게 맞춘다.
+        TextView text = tileText(side * 0.36f * SECONDARY_TEXT_RATIO, wLabel(), true);
+        text.setMaxLines(1);
+        text.setSingleLine(true);
+        return text;
     }
 
     /** box(세로 정렬 타일)를 꽉 채우는 LayoutParams (매번 새로 생성). */
@@ -948,7 +967,8 @@ public class OverlayService extends Service {
             int dow = dc.get(java.util.Calendar.DAY_OF_WEEK);
             boolean holiday = HolidayStore.isHoliday(this, dc);
             String day = new SimpleDateFormat("d", Locale.getDefault()).format(now);
-            dateDay.setText(withCleanSuffix(day, weekdayOneChar(dow)));
+            dateDay.setText(withCleanSuffix(day, weekdayOneChar(dow),
+                    DATE_SECONDARY_TEXT_RATIO));
             // 요일과 숫자에 색 규칙 적용.
             dateWeekday.setTextColor(HolidayStore.colorFor(dow, holiday, wLabel()));
             dateDay.setTextColor(HolidayStore.colorFor(dow, holiday, wFg()));
@@ -1001,10 +1021,12 @@ public class OverlayService extends Service {
         weatherHeader.setEllipsize(android.text.TextUtils.TruncateAt.END);
         weatherHeader.setText(cacheDong != null ? cacheDong : "");
         boolean clean = widgetCleanMode();
-        tempView = tileText(side * (clean ? 0.18f : 0.15f), wLabel(), false);
-        tempView.setMaxLines(1);
-        tempView.setSingleLine(true);
-        tempView.setText(cacheTempC != null ? weatherTempText(cacheTempC) : "—");
+        tempView = clean ? secondaryText(side) : tileText(side * 0.15f, wLabel(), false);
+        if (!clean) {
+            tempView.setMaxLines(1);
+            tempView.setSingleLine(true);
+        }
+        setWeatherTempText(cacheTempC != null ? weatherTempText(cacheTempC) : "—");
         weatherIconView = new ImageView(this);
         int isz = Math.round(side * 0.40f);
         if (cacheKind != null) weatherIconView.setImageDrawable(new WeatherIcon(cacheKind));
@@ -1056,7 +1078,8 @@ public class OverlayService extends Service {
             if (dustFooter != null) dustFooter.setText("");
             return;
         }
-        dustView.setText(String.valueOf(pm));
+        dustView.setText(withCleanSuffix(String.valueOf(pm),
+                dustShowPm25 ? "PM2.5" : "PM10"));
         int color = dustGradeColor(pm, dustShowPm25);
         dustView.setTextColor(color);
         if (dustFooter != null) {   // 등급 문구(등급색)
@@ -1331,7 +1354,7 @@ public class OverlayService extends Service {
                     ui.post(() -> {
                         if (weatherIconView != null)
                             weatherIconView.setImageDrawable(new WeatherIcon(kind));
-                        if (tempView != null) tempView.setText(weatherTempText(tempC));
+                        if (tempView != null) setWeatherTempText(weatherTempText(tempC));
                     });
                 } catch (Throwable t) {
                     if (cacheTempC == null) post(tempView, "—");  // 캐시 있으면 유지
@@ -1739,10 +1762,15 @@ public class OverlayService extends Service {
 
     /** 메인 값 뒤에 붙는 공통 보조 표시: 50% 크기 + 보조색. */
     private CharSequence withSecondarySuffix(String number, String suffix) {
+        return withSecondarySuffix(number, suffix, SECONDARY_TEXT_RATIO);
+    }
+
+    private CharSequence withSecondarySuffix(String number, String suffix, float sizeRatio) {
         android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(number);
         int start = sb.length();
         sb.append(suffix);
-        sb.setSpan(new android.text.style.RelativeSizeSpan(0.5f), start, sb.length(),
+        sb.setSpan(new android.text.style.RelativeSizeSpan(sizeRatio),
+                start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
         sb.setSpan(new android.text.style.ForegroundColorSpan(wLabel()), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
@@ -2221,7 +2249,7 @@ public class OverlayService extends Service {
                     touchY = e.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (gridActive) return true;   // 그리드는 위치 고정 (드래그 불가)
+                    if (gridActive && homeFgNow) return true;   // 홈의 그리드만 위치 고정
                     // 드래그 중엔 손가락만 따라감
                     lp.x = startX + (int) (e.getRawX() - touchX);
                     lp.y = startY + (int) (e.getRawY() - touchY);
@@ -2229,7 +2257,7 @@ public class OverlayService extends Service {
                     wm.updateViewLayout(dock, lp);
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (gridActive) return true;   // 그리드는 위치 저장 안 함
+                    if (gridActive && homeFgNow) return true;   // 홈의 그리드는 위치 저장 안 함
                     clamp();
                     wm.updateViewLayout(dock, lp);
                     snapAfterDrag();   // 위치 저장
@@ -2311,10 +2339,16 @@ public class OverlayService extends Service {
         return value + (tempFahrenheit() ? "°F" : "°C");
     }
 
+    /** 날씨 보조 온도를 갱신한다. */
+    private void setWeatherTempText(CharSequence value) {
+        if (tempView == null) return;
+        tempView.setText(value);
+    }
+
     /** 온도 단위 전환은 독을 재구성하지 않고 날씨와 외기온도 값만 바꾼다. */
     private void updateTempUnitUi() {
         if (tempView != null && cacheTempC != null)
-            tempView.setText(weatherTempText(cacheTempC));
+            setWeatherTempText(weatherTempText(cacheTempC));
         if (tempUnitLabel != null) tempUnitLabel.setText(tempUnit());
         TextView outside = vehValues.get(ShortcutStore.KEY_V_TEMP);
         CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_TEMP);
