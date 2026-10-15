@@ -29,7 +29,10 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         DownloadManager manager = (DownloadManager) context.getSystemService(
                 Context.DOWNLOAD_SERVICE);
         if (manager == null || !downloadSucceeded(manager, completedId)) {
-            prefs.edit().putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true).apply();
+            prefs.edit()
+                    .putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true)
+                    .putBoolean(UpdateManager.KEY_MANUAL_INSTALL_VISIBLE, false)
+                    .apply();
             clearDownload(prefs);
             UpdateManager.notifyResult(context, "PolDock 업데이트 실패",
                     "APK를 다운로드하지 못했습니다.", null);
@@ -40,17 +43,25 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
         String error = verifyApk(context, new File(path));
         if (error != null) {
             new File(path).delete();
-            prefs.edit().putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true).apply();
+            prefs.edit()
+                    .putBoolean(UpdateManager.KEY_UPDATE_AVAILABLE, true)
+                    .putBoolean(UpdateManager.KEY_MANUAL_INSTALL_VISIBLE, false)
+                    .apply();
             clearDownload(prefs);
             UpdateManager.notifyResult(context, "PolDock 업데이트 검증 실패", error, null);
             return;
         }
 
         clearDownload(prefs);
-        // 백그라운드에서 화면을 강제로 띄우지 않고, 알림을 누르면 권한 확인 후 설치로 이어진다.
-        Intent install = UpdateManager.installOrBrowseIntent(context, completedId);
-        UpdateManager.notifyResult(context, "PolDock 다운로드 완료",
-                "눌러서 설치를 계속하세요.", install);
+        // 설치 권한이 있으면 설치 화면으로, 없으면 직접 설치할 수 있도록 다운로드 폴더로 보낸다.
+        boolean canInstall = UpdateManager.canInstallDirectly(context);
+        Intent next = canInstall
+                ? UpdateManager.installOrBrowseIntent(context, completedId)
+                : UpdateManager.browseDownloadsIntent(context);
+        String message = canInstall
+                ? "눌러서 설치를 계속하세요."
+                : "설치 권한이 없습니다. 다운로드 폴더에서 APK를 직접 설치하세요.";
+        UpdateManager.notifyResult(context, "PolDock 다운로드 완료", message, next);
     }
 
     private static boolean downloadSucceeded(DownloadManager manager, long id) {

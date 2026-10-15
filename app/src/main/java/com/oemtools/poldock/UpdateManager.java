@@ -44,6 +44,7 @@ final class UpdateManager {
     static final String KEY_DOWNLOAD_PATH = "ota_download_path";
     static final String KEY_DOWNLOAD_VERSION = "ota_download_version";
     static final String KEY_UPDATE_AVAILABLE = "ota_update_available";
+    static final String KEY_MANUAL_INSTALL_VISIBLE = "ota_manual_install_visible";
     static final String KEY_LAST_CHECK = "ota_last_check";
 
     private static final String TAG = "PolDockUpdate";
@@ -89,7 +90,10 @@ final class UpdateManager {
                 if (release != null) {
                     boolean available = compareVersions(
                             release.version, BuildConfig.VERSION_NAME) > 0;
-                    prefs(app).edit().putBoolean(KEY_UPDATE_AVAILABLE, available).apply();
+                    SharedPreferences.Editor editor = prefs(app).edit()
+                            .putBoolean(KEY_UPDATE_AVAILABLE, available);
+                    if (!available) editor.putBoolean(KEY_MANUAL_INSTALL_VISIBLE, false);
+                    editor.apply();
                     if (available) notifyAvailable(app, release);
                 }
             } catch (Exception e) {
@@ -167,11 +171,18 @@ final class UpdateManager {
         return prefs(context).getBoolean(KEY_UPDATE_AVAILABLE, false);
     }
 
+    static boolean isManualInstallVisible(Context context) {
+        SharedPreferences preferences = prefs(context);
+        if (!preferences.getBoolean(KEY_MANUAL_INSTALL_VISIBLE, false)) return false;
+        Release release = releaseFromCache(preferences);
+        return release != null && compareVersions(release.version, BuildConfig.VERSION_NAME) > 0;
+    }
+
     static boolean isInternalPreference(String key) {
         return key != null && key.startsWith("ota_") && !KEY_UPDATE_AVAILABLE.equals(key);
     }
 
-    static void openUpdatePrompt(Context context) {
+    static void startUpdateDownload(Context context) {
         Release release = releaseFromCache(prefs(context));
         if (release == null) return;
         context.startActivity(updateIntent(context, release)
@@ -235,6 +246,7 @@ final class UpdateManager {
                 .putString(KEY_DOWNLOAD_PATH, target.getAbsolutePath())
                 .putString(KEY_DOWNLOAD_VERSION, version)
                 .putBoolean(KEY_UPDATE_AVAILABLE, false)
+                .putBoolean(KEY_MANUAL_INSTALL_VISIBLE, true)
                 .apply();
         notificationManager(context).cancel(AVAILABLE_NOTIFICATION);
         return id;

@@ -13,6 +13,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.text.InputType;
+import android.net.Uri;
 import android.view.Gravity;
 import android.view.DragEvent;
 import android.view.KeyEvent;
@@ -26,6 +27,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -278,6 +282,49 @@ public class EditPanel {
         photoPickerScrollY = -1;
     }
 
+    /** 다운로드한 APK를 첨부 파일 선택기로 고를 수 있는 48dp WebView 버튼. */
+    private WebView buildUpdateAttachButton(Context context) {
+        WebView web = new WebView(context);
+        web.setBackgroundColor(Color.TRANSPARENT);
+        web.setVerticalScrollBarEnabled(false);
+        web.setHorizontalScrollBarEnabled(false);
+        web.setContentDescription("다운로드한 APK 직접 설치");
+        web.getSettings().setJavaScriptEnabled(false);
+        web.getSettings().setSupportZoom(false);
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return openUpdateFilePicker(request == null ? null : request.getUrl());
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return openUpdateFilePicker(url == null ? null : Uri.parse(url));
+            }
+        });
+        String html = "<html><head><meta name='viewport' content='width=device-width,"
+                + "initial-scale=1,maximum-scale=1,user-scalable=no'></head>"
+                + "<body style='margin:0;background:transparent;overflow:hidden'>"
+                + "<a href='poldock://pick-update' style='display:flex;width:100vw;height:100vh;"
+                + "box-sizing:border-box;align-items:center;justify-content:center;"
+                + "border-radius:9px;background:#2878b8;color:white;text-decoration:none;"
+                + "font:700 12px sans-serif'>첨부</a></body></html>";
+        web.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        return web;
+    }
+
+    private boolean openUpdateFilePicker(Uri uri) {
+        if (uri == null || !"poldock".equalsIgnoreCase(uri.getScheme())
+                || !"pick-update".equalsIgnoreCase(uri.getHost())) return false;
+        try {
+            svc.startActivity(new Intent(svc, UpdateFilePickerActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException ignored) {
+        }
+        return true;
+    }
+
     // ------------------------------------------------------------ 내용 구성
 
     private void populate() {
@@ -299,13 +346,19 @@ public class EditPanel {
             update.setPadding(Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10));
             update.setContentDescription("업데이트 있음");
             update.setOnClickListener(v -> {
-                hide();
-                UpdateManager.openUpdatePrompt(c);
+                v.setEnabled(false);
+                UpdateManager.startUpdateDownload(c);
             });
             LinearLayout.LayoutParams updateLp = new LinearLayout.LayoutParams(
                     Ui.dp(c, 48), Ui.dp(c, 48));
             updateLp.rightMargin = Ui.dp(c, 6);
             header.addView(update, updateLp);
+        } else if (UpdateManager.isManualInstallVisible(c)) {
+            WebView attach = buildUpdateAttachButton(c);
+            LinearLayout.LayoutParams attachLp = new LinearLayout.LayoutParams(
+                    Ui.dp(c, 48), Ui.dp(c, 48));
+            attachLp.rightMargin = Ui.dp(c, 6);
+            header.addView(attach, attachLp);
         }
         // 닫기: 업데이트 아이콘과 같은 48dp 정사각형, 대문자 X를 정중앙에
         TextView close = Ui.chip(c, "X", Ui.GREY, v -> hide());

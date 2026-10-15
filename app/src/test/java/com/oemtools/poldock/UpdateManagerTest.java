@@ -1,6 +1,7 @@
 package com.oemtools.poldock;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -17,5 +18,12 @@ public class UpdateManagerTest {
         assertTrue(UpdateManager.compareVersions("v1.3.2", "1.3.1") > 0);
         assertTrue(UpdateManager.compareVersions("v1.3.3", "1.3.2") > 0);
         assertTrue(UpdateManager.compareVersions("v1.3.4", "1.3.3") > 0);
+    }
+
+    @Test
+    public void onlyVisibleUpdateStateRebuildsTheDock() {
+        assertFalse(UpdateManager.isInternalPreference(UpdateManager.KEY_UPDATE_AVAILABLE));
+        assertTrue(UpdateManager.isInternalPreference(UpdateManager.KEY_MANUAL_INSTALL_VISIBLE));
+        assertTrue(UpdateManager.isInternalPreference(UpdateManager.KEY_DOWNLOAD_ID));
     }
 }
