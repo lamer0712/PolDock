@@ -66,6 +66,7 @@ public class OverlayService extends Service {
     static final String KEY_ORI = "dock_ori";
     static final String ORI_OFF = "off";   // 꺼짐: 해당 화면에서 독을 표시하지 않음
     static final String EXTRA_FROM_LAUNCHER = "from_launcher";
+    static final String EXTRA_OPEN_EDITOR = "open_editor";
     private static final String ECARX_DISPLAY_AREA_STATE = "com.ecarx.displayarea.STATE";
     private static final String ECARX_DISPLAY_AREA_UPDATE =
             "com.ecarx.displayarea.core.STATE_COMPONENT_UPDATE";
@@ -319,7 +320,9 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && intent.getBooleanExtra(EXTRA_FROM_LAUNCHER, false)) {
+        if (intent != null && intent.getBooleanExtra(EXTRA_OPEN_EDITOR, false)) {
+            openApp();
+        } else if (intent != null && intent.getBooleanExtra(EXTRA_FROM_LAUNCHER, false)) {
             // 앱 아이콘으로 실행: 독이 꺼져 있으면 손잡이가 없으므로 편집 패널을 바로 연다
             if (dock == null) {
                 openApp();
@@ -2708,6 +2711,10 @@ public class OverlayService extends Service {
     /** 앱 아이콘에서 실행: 독이 꺼져 있으면 편집 패널을 연다. */
     static void startFromLauncher(Context ctx) {
         start(ctx, new Intent(ctx, OverlayService.class).putExtra(EXTRA_FROM_LAUNCHER, true));
+    }
+
+    static void openEditor(Context ctx) {
+        start(ctx, new Intent(ctx, OverlayService.class).putExtra(EXTRA_OPEN_EDITOR, true));
     }
 
     private static void start(Context ctx, Intent intent) {

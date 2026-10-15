@@ -11,7 +11,6 @@ import android.graphics.Point;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Build;
 import android.text.InputType;
 import android.view.Gravity;
@@ -969,7 +968,7 @@ public class EditPanel {
                         + "날짜_시각.png로 보관하고 latest.png도 최신 사진으로 갱신합니다."));
 
         TextView tokenButton = Ui.button(c,
-                tokenSaved ? "MYBOX 토큰 변경" : "MYBOX 토큰 등록",
+                tokenSaved ? "MYBOX 토큰 변경" : "MYBOX 토큰 입력",
                 tokenSaved ? Ui.GREY : Ui.ACCENT,
                 v -> showMyBoxTokenDialog(false));
         tokenButton.setEnabled(supported);
@@ -979,11 +978,8 @@ public class EditPanel {
         buttonLp.topMargin = Ui.dp(c, 10);
         card.addView(tokenButton, buttonLp);
 
-        TextView guide = Ui.button(c, "토큰 발급 방법", Ui.GREY, v -> {
-            Intent intent = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://developers.mybox.naver.com/getting-started"));
-            launchAndClose(intent);
-        });
+        TextView guide = Ui.button(c, "토큰 발급받기", Ui.GREY,
+                v -> launchAndClose(new Intent(c, MyBoxTokenActivity.class)));
         LinearLayout.LayoutParams guideLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         guideLp.topMargin = Ui.dp(c, 8);
