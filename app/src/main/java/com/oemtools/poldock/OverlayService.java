@@ -18,6 +18,8 @@ import android.graphics.Shader;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Address;
+import android.location.Geocoder;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.Build;
@@ -81,6 +83,8 @@ public class OverlayService extends Service {
     // 런처 카드 헤더 아이콘: card_icon_size=64dp, card_icon_margin_*=32dp
     private static final int CARD_ICON_DP = 64;
     private static final int CARD_ICON_MARGIN_DP = 32;
+    private static final float WIDGET_CONTENT_Y_OFFSET_RATIO = 0.01f;
+    private static final float KM_TO_MILE = 0.621371f;
     // 바로가기 등 고정(라이트) 타일색
     private static final int SHORTCUT_BG = 0xFFFFFFFF;
     private static final int SHORTCUT_FG = 0xFF1C1C1E;
@@ -96,11 +100,12 @@ public class OverlayService extends Service {
     private long gridPhotoModified;
     private String gridPhotoConfig;
     private LinearLayout shortcutRow;
-    private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay, dateHolidayName;
+    private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay,
+            dateHolidayName;
     private MonthCalendarView dateCalendarView;
-    private TextView speedLabel;
+    private TextView speedLabel, rangeLabel, tempUnitLabel;
     private final Map<String, TextView> effLabels = new LinkedHashMap<>();
-    private ImageView weatherIconView, musicArt, carSweep, speedNeedle, speedGauge;
+    private ImageView weatherIconView, musicArt, carSweep;
     private TextView musicPh;
     private String prevGear;
     private View[] lampDots;
@@ -114,17 +119,16 @@ public class OverlayService extends Service {
     private String pendingSnapEdge;  // 재구성 후 벽에 붙일 위치 (top/bottom/left/right/gridTop/gridBottom)
     private static final int SNAP_EDGE_DP = 50;   // 벽 스냅 발동 범위 (손가락 두께 정도)
 
-    /** 속도 → 바늘 회전각(나침반 방위). SW(225°)=0, N(360°)=100, SE(495°=135°)=200 */
-    private float speedAngle(int kmh) {
-        return 225f + kmh * 1.35f;
-    }
     private final Map<String, TextView> vehValues = new LinkedHashMap<>();
 
     // 재생성 시 즉시 보여줄 마지막 값 캐시 (깜빡임 방지)
-    private String cacheTemp;
+    private Integer cacheTempC;
+    private String cacheDong;          // 현위치 읍/면/동
+    private TextView weatherHeader;    // 날씨 타일 헤더(동)
     private WeatherIcon.Kind cacheKind;
     private int cachePm10 = -2, cachePm25 = -2;
     private TextView dustLabel;
+    private TextView dustFooter;   // 등급(좋음/보통/나쁨/최악)
     private boolean dustShowPm25;
     private final Runnable dustRevert = () -> {
         dustShowPm25 = false;
@@ -194,6 +198,16 @@ public class OverlayService extends Service {
                     if (dock != null) dock.setAlpha(dockAlpha());
                     return;
                 }
+                if (ShortcutStore.KEY_DOCK_BG_MODE.equals(key)
+                        || ShortcutStore.KEY_DOCK_BG_COLOR.equals(key)
+                        || ShortcutStore.KEY_DOCK_BORDER_COLOR.equals(key)
+                        || ShortcutStore.KEY_DOCK_BORDER_WIDTH.equals(key)) {
+                    if (dock != null && !gridActive) {
+                        applyDockBackground((LinearLayout) dock, false);
+                        applyDockCorner();
+                    }
+                    return;
+                }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
                 if (UpdateManager.isInternalPreference(key)) return;
                 if (HolidayStore.isInternalPreference(key)) return;   // 공휴일 캐시는 재구성 불필요
@@ -201,7 +215,11 @@ public class OverlayService extends Service {
                 if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
                 if (ShortcutStore.KEY_SPEED_MPH.equals(key)) {
-                    updateSpeedUnitUi();
+                    updateDistanceUnitUi();
+                    return;
+                }
+                if (ShortcutStore.KEY_TEMP_FAHRENHEIT.equals(key)) {
+                    updateTempUnitUi();
                     return;
                 }
                 if (ShortcutStore.KEY_EFF_WHKM.equals(key)) {
@@ -355,7 +373,12 @@ public class OverlayService extends Service {
             dock = bar;
             barBg = new GradientDrawable();
             barBg.setColor(0xDD111111);
-            barBg.setStroke(d(1), 0x55FFFFFF);
+            int borderWidth = Math.max(0, Math.min(10,
+                    sp.getInt(ShortcutStore.KEY_DOCK_BORDER_WIDTH,
+                            ShortcutStore.DEFAULT_DOCK_BORDER_WIDTH)));
+            int borderColor = sp.getInt(ShortcutStore.KEY_DOCK_BORDER_COLOR,
+                    ShortcutStore.DEFAULT_DOCK_BORDER_COLOR);
+            barBg.setStroke(d(borderWidth), borderColor);
             barBg.setCornerRadius(d(26));
             bar.setBackground(barBg);
             // 크기가 바뀔 때마다 코너 반경 재계산 (그리드↔가로 전환 시 묵은 크기로 계산되는 문제 방지)
@@ -406,7 +429,8 @@ public class OverlayService extends Service {
         } else {
             lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-            bar.setPadding(d(8), d(8), d(8), d(8));
+            // 타일 자체 여백(좌우 5, 상하 3)과 맞춰 독 가장자리도 같은 호흡으로 유지한다.
+            bar.setPadding(d(5), d(3), d(5), d(3));
         }
 
         TextView handle = new TextView(this);
@@ -427,7 +451,9 @@ public class OverlayService extends Service {
         final java.util.List<View> items = new java.util.ArrayList<>();
         weatherIconView = null;
         tempView = null;
+        weatherHeader = null;
         dustView = null;
+        dustFooter = null;
         dustLabel = null;
         dustShowPm25 = false;
         ui.removeCallbacks(dustRevert);
@@ -438,9 +464,9 @@ public class OverlayService extends Service {
         musicPh = null;
         carSweep = null;
         lampDots = null;
-        speedNeedle = null;
-        speedGauge = null;
         speedLabel = null;
+        rangeLabel = null;
+        tempUnitLabel = null;
         effLabels.clear();
         batteryBar = null;
         hasVehWidget = false;
@@ -710,7 +736,7 @@ public class OverlayService extends Service {
         g.setColor(fillColor);
         g.setCornerRadius(side * CalendarTile.CORNER_RATIO);
         l.setBackground(g);
-        l.setPadding(d(3), d(2), d(3), d(2));
+        l.setPadding(0, 0, 0, 0);   // 날짜 타일과 동일하게 안쪽 패딩 없음(footer 기준선 일치)
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
         lp.setMargins(d(5), d(3), d(5), d(3));
         l.setLayoutParams(lp);
@@ -742,6 +768,73 @@ public class OverlayService extends Service {
         return t;
     }
 
+    /** 위젯 내부의 header · main · footer를 한 세로 그룹으로 묶어 타일 중앙에 배치한다. */
+    private FrameLayout centeredContent(View header, View main, View footer) {
+        int side = tileSide();
+        FrameLayout f = new FrameLayout(this);
+
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setGravity(Gravity.CENTER_HORIZONTAL);
+        if (header != null && sp.getBoolean(ShortcutStore.KEY_WIDGET_HEADER_ON, true)) {
+            group.addView(header, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        // main: 미리 지정한 크기(예: 아이콘)는 유지한다.
+        ViewGroup.LayoutParams existing = main.getLayoutParams();
+        LinearLayout.LayoutParams mainLp = (existing != null)
+                ? new LinearLayout.LayoutParams(existing.width, existing.height)
+                : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        mainLp.gravity = Gravity.CENTER_HORIZONTAL;
+        group.addView(main, mainLp);
+
+        if (footer != null && sp.getBoolean(ShortcutStore.KEY_WIDGET_FOOTER_ON, true)) {
+            group.addView(footer, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        group.setTranslationY(side * WIDGET_CONTENT_Y_OFFSET_RATIO);
+        f.addView(group, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER));
+        return f;
+    }
+
+    private boolean widgetCleanMode() {
+        return !sp.getBoolean(ShortcutStore.KEY_WIDGET_HEADER_ON, true)
+                && !sp.getBoolean(ShortcutStore.KEY_WIDGET_FOOTER_ON, true);
+    }
+
+    /** 클린 모드에서 텍스트 메인 뒤에 붙는 공통 보조 표시. */
+    private CharSequence withCleanSuffix(String main, String suffix) {
+        if (!widgetCleanMode() || "—".equals(main) || suffix == null || suffix.isEmpty()) {
+            return main;
+        }
+        return withSecondarySuffix(main, suffix);
+    }
+
+    /** 클린 모드에서 그림 메인 오른쪽 아래에 보조 내용을 붙이는 공통 배치. */
+    private View withCleanSideContent(View main, int mainWidth, int mainHeight, View secondary) {
+        if (!widgetCleanMode() || secondary == null) return main;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        row.addView(main, new LinearLayout.LayoutParams(mainWidth, mainHeight));
+        LinearLayout.LayoutParams secondaryLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        secondaryLp.gravity = Gravity.BOTTOM;
+        row.addView(secondary, secondaryLp);
+        return row;
+    }
+
+    /** box(세로 정렬 타일)를 꽉 채우는 LayoutParams (매번 새로 생성). */
+    private LinearLayout.LayoutParams fillBox() {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
     // ---------------------------------------------------------------- 날짜/시간
 
     private View buildDateTile() {
@@ -759,26 +852,17 @@ public class OverlayService extends Service {
             }
         });
 
-        LinearLayout date = new LinearLayout(this);
-        date.setOrientation(LinearLayout.VERTICAL);
-        date.setGravity(Gravity.CENTER);
-        dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
-        dateDay = valueText(side);                              // 날짜 (아래, 값)
-        date.addView(dateWeekday);
-        date.addView(dateDay);
-        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
-
-        // 공휴일 이름: 요일+숫자 위치는 그대로 두고 타일 하단에 겹쳐 표시(작은 글씨, 기본색).
+        // header: 요일 · main: 날짜 · footer: 공휴일 이름
+        dateWeekday = tileText(side * 0.20f, wLabel(), false);
+        dateDay = valueText(side);
         dateHolidayName = tileText(side * 0.15f, wLabel(), false);
         dateHolidayName.setMaxLines(1);                 // 두 줄로 넘기지 않음
         dateHolidayName.setSingleLine(true);
         dateHolidayName.setEllipsize(android.text.TextUtils.TruncateAt.END);
         dateHolidayName.setVisibility(View.GONE);
-        FrameLayout.LayoutParams nameLp = new FrameLayout.LayoutParams(
-                side, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        nameLp.bottomMargin = Math.round(side * 0.07f);
-        tile.addView(dateHolidayName, nameLp);
+
+        final FrameLayout date = centeredContent(dateWeekday, dateDay, dateHolidayName);
+        tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
 
         dateCalendarView = new MonthCalendarView(this);
         dateCalendarView.setColors(wFg(), wLabel(), Ui.ACCENT);
@@ -797,8 +881,7 @@ public class OverlayService extends Service {
             sp.edit().putBoolean(ShortcutStore.KEY_DATE_CALENDAR, show).apply();
             date.setVisibility(show ? View.GONE : View.VISIBLE);
             dateCalendarView.setVisibility(show ? View.VISIBLE : View.GONE);
-            if (show && dateHolidayName != null) dateHolidayName.setVisibility(View.GONE);
-            else updateClock();   // 날짜 뷰로 전환 시 공휴일 이름 즉시 반영
+            if (!show) updateClock();   // 날짜 뷰로 전환 시 공휴일 이름 즉시 반영
         });
 
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(side, side);
@@ -823,14 +906,10 @@ public class OverlayService extends Service {
         bg.setCornerRadius(radius);
         tile.setBackground(bg);
 
-        // 디지털
-        final LinearLayout dig = new LinearLayout(this);
-        dig.setOrientation(LinearLayout.VERTICAL);
-        dig.setGravity(Gravity.CENTER);
-        timeAmPm = tileText(side * 0.20f, wLabel(), false);   // 오전/오후 (위)
-        timeView = valueText(side);                            // 시각 (아래)
-        dig.addView(timeAmPm);
-        dig.addView(timeView);
+        // 디지털: header(오전/오후) · main(시각) · footer(빈 공간)
+        timeAmPm = tileText(side * 0.20f, wLabel(), false);
+        timeView = valueText(side);
+        final FrameLayout dig = centeredContent(timeAmPm, timeView, null);
         tile.addView(dig, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
 
         // 아날로그
@@ -863,18 +942,18 @@ public class OverlayService extends Service {
         if (dateWeekday != null) {
             Date now = new Date();
             dateWeekday.setText(new SimpleDateFormat("E", Locale.getDefault()).format(now));
-            dateDay.setText(new SimpleDateFormat("d", Locale.getDefault()).format(now));
             // 날짜 뷰도 색 규칙 적용: 공휴일/일요일=빨강, 토요일=파랑, 평일=기본색
             java.util.Calendar dc = java.util.Calendar.getInstance();
             dc.setTime(now);
             int dow = dc.get(java.util.Calendar.DAY_OF_WEEK);
             boolean holiday = HolidayStore.isHoliday(this, dc);
+            String day = new SimpleDateFormat("d", Locale.getDefault()).format(now);
+            dateDay.setText(withCleanSuffix(day, weekdayOneChar(dow)));
             // 요일과 숫자에 색 규칙 적용.
             dateWeekday.setTextColor(HolidayStore.colorFor(dow, holiday, wLabel()));
             dateDay.setTextColor(HolidayStore.colorFor(dow, holiday, wFg()));
-            if (dateHolidayName != null) {   // 하단 공휴일 이름(날짜 뷰 + 공휴일일 때만)
-                boolean calMode = sp.getBoolean(ShortcutStore.KEY_DATE_CALENDAR, false);
-                String hn = calMode ? null : HolidayStore.nameFor(this, dc);
+            if (dateHolidayName != null) {   // footer 공휴일 이름(달력 뷰에선 date 가 통째로 숨겨짐)
+                String hn = HolidayStore.nameFor(this, dc);
                 if (hn != null) {
                     dateHolidayName.setText(HolidayStore.shortName(hn));
                     dateHolidayName.setVisibility(View.VISIBLE);
@@ -904,30 +983,53 @@ public class OverlayService extends Service {
         }
     }
 
+    private String weekdayOneChar(int dayOfWeek) {
+        final String[] names = {"", "일", "월", "화", "수", "목", "금", "토"};
+        return dayOfWeek >= java.util.Calendar.SUNDAY
+                && dayOfWeek <= java.util.Calendar.SATURDAY ? names[dayOfWeek] : "";
+    }
+
     // ---------------------------------------------------------------- 날씨/미세먼지
 
     private View buildWeatherTile() {
         int side = tileSide();
         LinearLayout box = tileBox(wBg());
-        tempView = tileText(side * 0.24f, wLabel(), false);   // 온도 (°기호 보정으로 살짝 키움)
-        tempView.setText(cacheTemp != null ? cacheTemp : "—");
-        box.addView(tempView);
-        weatherIconView = new ImageView(this);                  // 그림 (아래)
+        // header: 현위치 동 · main: 날씨 그림(중앙) · footer: 온도 (헤더 글씨는 다른 위젯과 동일 0.20)
+        weatherHeader = tileText(side * 0.20f, wLabel(), false);
+        weatherHeader.setMaxLines(1);
+        weatherHeader.setSingleLine(true);
+        weatherHeader.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        weatherHeader.setText(cacheDong != null ? cacheDong : "");
+        boolean clean = widgetCleanMode();
+        tempView = tileText(side * (clean ? 0.18f : 0.15f), wLabel(), false);
+        tempView.setMaxLines(1);
+        tempView.setSingleLine(true);
+        tempView.setText(cacheTempC != null ? weatherTempText(cacheTempC) : "—");
+        weatherIconView = new ImageView(this);
         int isz = Math.round(side * 0.40f);
         if (cacheKind != null) weatherIconView.setImageDrawable(new WeatherIcon(cacheKind));
-        box.addView(weatherIconView, new LinearLayout.LayoutParams(isz, isz));
+        View weatherMain = withCleanSideContent(weatherIconView, isz, isz, tempView);
+        TextView weatherFooter = clean ? null : tempView;
+        if (!clean) {
+            weatherIconView.setLayoutParams(new FrameLayout.LayoutParams(isz, isz));
+        }
+        box.addView(centeredContent(weatherHeader, weatherMain, weatherFooter), fillBox());
+        box.setClickable(true);
+        box.setOnClickListener(v -> toggleTempUnit());
         return box;
     }
 
     private View buildDustTile() {
         int side = tileSide();
         LinearLayout box = tileBox(wBg());
-        dustLabel = tileText(side * 0.20f, wLabel(), false);   // 라벨 (미세/초미세)
-        dustLabel.setText("미세");
+        dustLabel = tileText(side * 0.20f, wLabel(), false);   // 라벨 (미세먼지/초미세먼지)
+        dustLabel.setText("미세먼지");
         dustView = valueText(side);   // 값 (아래)
         dustView.setText("…");
-        box.addView(dustLabel);
-        box.addView(dustView);
+        dustFooter = tileText(side * 0.15f, wLabel(), false);   // footer: 등급
+        dustFooter.setMaxLines(1);
+        dustFooter.setSingleLine(true);
+        box.addView(centeredContent(dustLabel, dustView, dustFooter), fillBox());
         box.setClickable(true);
         box.setOnClickListener(v -> {
             toggleDust();
@@ -947,14 +1049,31 @@ public class OverlayService extends Service {
     private void renderDustCurrent() {
         if (dustView == null) return;
         int pm = dustShowPm25 ? cachePm25 : cachePm10;
-        if (dustLabel != null) dustLabel.setText(dustShowPm25 ? "초미세" : "미세");
+        if (dustLabel != null) dustLabel.setText(dustShowPm25 ? "초미세먼지" : "미세먼지");
         if (pm < 0) {
             dustView.setText("—");
             dustView.setTextColor(wFg());
+            if (dustFooter != null) dustFooter.setText("");
             return;
         }
         dustView.setText(String.valueOf(pm));
-        dustView.setTextColor(dustGradeColor(pm, dustShowPm25));
+        int color = dustGradeColor(pm, dustShowPm25);
+        dustView.setTextColor(color);
+        if (dustFooter != null) {   // 등급 문구(등급색)
+            dustFooter.setText(dustGradeText(pm, dustShowPm25));
+            dustFooter.setTextColor(color);
+        }
+    }
+
+    /** 한국 환경부 기준 등급 문구. */
+    private String dustGradeText(int pm, boolean pm25) {
+        int good, moderate, bad;
+        if (pm25) { good = 15; moderate = 35; bad = 75; }   // PM2.5
+        else { good = 30; moderate = 80; bad = 150; }        // PM10
+        if (pm <= good) return "좋음";
+        if (pm <= moderate) return "보통";
+        if (pm <= bad) return "나쁨";
+        return "최악";
     }
 
     /** 한국 기준 등급색. 흰 바탕 가독용 어두운 색. */
@@ -962,8 +1081,8 @@ public class OverlayService extends Service {
         int good, moderate, bad;
         if (pm25) { good = 15; moderate = 35; bad = 75; }   // PM2.5
         else { good = 30; moderate = 80; bad = 150; }        // PM10
-        if (pm <= good) return 0xFF1E8E3E;
-        if (pm <= moderate) return 0xFFB8860B;
+        if (pm <= good) return 0xFF1976D2;
+        if (pm <= moderate) return 0xFF1E8E3E;
         if (pm <= bad) return 0xFFE0661A;
         return 0xFFD23B30;
     }
@@ -1179,26 +1298,43 @@ public class OverlayService extends Service {
         new Thread(() -> {
             Location loc = lastLocation();
             if (loc == null) {
-                if (weather && cacheTemp == null) post(tempView, "위치");
+                if (weather && cacheTempC == null) post(tempView, "위치");
                 return;
             }
             if (weather) {
+                try {   // 현위치 읍/면/동 역지오코딩 (키 불필요)
+                    Geocoder gc = new Geocoder(this, Locale.KOREA);
+                    java.util.List<Address> addrs =
+                            gc.getFromLocation(loc.getLatitude(), loc.getLongitude(), 1);
+                    if (addrs != null && !addrs.isEmpty()) {
+                        Address a = addrs.get(0);
+                        String dong = a.getSubLocality();   // 보통 읍/면/동
+                        if (dong == null || dong.isEmpty()) dong = a.getThoroughfare();
+                        if (dong == null || dong.isEmpty()) dong = a.getLocality();
+                        if (dong != null && !dong.isEmpty()) {
+                            final String d = dong;
+                            cacheDong = d;
+                            ui.post(() -> { if (weatherHeader != null) weatherHeader.setText(d); });
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
                 try {
                     String j = httpGet("https://api.open-meteo.com/v1/forecast?latitude="
                             + loc.getLatitude() + "&longitude=" + loc.getLongitude()
                             + "&current=temperature_2m,weather_code");
                     JSONObject cur = new JSONObject(j).getJSONObject("current");
                     final WeatherIcon.Kind kind = WeatherIcon.fromCode(cur.getInt("weather_code"));
-                    final String tt = Math.round(cur.getDouble("temperature_2m")) + "°";
-                    cacheTemp = tt;
+                    final int tempC = (int) Math.round(cur.getDouble("temperature_2m"));
+                    cacheTempC = tempC;
                     cacheKind = kind;
                     ui.post(() -> {
                         if (weatherIconView != null)
                             weatherIconView.setImageDrawable(new WeatherIcon(kind));
-                        if (tempView != null) tempView.setText(tt);
+                        if (tempView != null) tempView.setText(weatherTempText(tempC));
                     });
                 } catch (Throwable t) {
-                    if (cacheTemp == null) post(tempView, "—");  // 캐시 있으면 유지
+                    if (cacheTempC == null) post(tempView, "—");  // 캐시 있으면 유지
                 }
             }
             if (dust) {
@@ -1297,41 +1433,53 @@ public class OverlayService extends Service {
         hasVehWidget = true;
         boolean gear = ShortcutStore.KEY_V_GEAR.equals(key);
         boolean speed = ShortcutStore.KEY_V_SPEED.equals(key);
+        boolean range = ShortcutStore.KEY_V_RANGE.equals(key);
         boolean eff = isEfficiencyKey(key);
+        boolean temp = ShortcutStore.KEY_V_TEMP.equals(key);
+        boolean battery = ShortcutStore.KEY_V_BATTERY.equals(key);
         LinearLayout box = tileBox(wBg());
-        if (gear || speed) box.setBackground(null);   // 배경은 FrameLayout에서 처리
-        TextView lab = tileText(side * 0.20f, wLabel(), false);   // 라벨 (위)
-        if (speed || eff) {
-            lab.setText(vehicleUnitLabel(speed, label));
-            lab.setMaxLines(1);
-            if (Build.VERSION.SDK_INT >= 26) {
-                int max = Math.round(side * 0.20f), min = Math.round(side * 0.10f);
-                int step = Math.max(1, Math.round(side * 0.01f));
-                lab.setAutoSizeTextTypeUniformWithConfiguration(min, max, step,
-                        TypedValue.COMPLEX_UNIT_PX);
-            }
-        } else {
-            lab.setText(label);
+        if (gear) box.setBackground(null);   // 기어 배경은 FrameLayout에서 처리
+        TextView lab = tileText(side * 0.20f, wLabel(), false);   // header: 이름
+        lab.setText(speed ? "속도" : label);
+        // 일반 모드에서는 단위를 footer 로 분리해서 표시한다.
+        TextView unitFooter = null;
+        if (speed || range || eff || temp || battery) {
+            unitFooter = tileText(side * 0.15f, wLabel(), false);
+            unitFooter.setMaxLines(1);
+            unitFooter.setSingleLine(true);
+            unitFooter.setText(speed ? speedUnit()
+                    : (range ? rangeUnit()
+                    : (eff ? effUnit() : (temp ? tempUnit() : "%"))));
         }
-        TextView val = valueText(side);   // 값 (아래)
+        TextView val = valueText(side);   // main: 값
         CharSequence cached = cacheVeh.get(key);
-        if (speed) val.setText(cached != null ? speedNum(parseIntSafe(cached)) : "—");
+        if (speed) val.setText(cached != null ? speedText(parseIntSafe(cached)) : "—");
+        else if (range) val.setText(cached != null ? rangeText(parseIntSafe(cached)) : "—");
         else if (eff) val.setText(cached != null ? effNum(parseFloatSafe(cached)) : "—");
+        else if (temp) val.setText(cached != null ? tempText(parseIntSafe(cached)) : "—");
+        else if (battery) val.setText(cached != null ? batteryText(parseIntSafe(cached)) : "—");
         else val.setText(cached != null ? cached : "—");   // 재생성 시 마지막 값 유지
         if (gear && cached != null) val.setTextColor(gearColor(cached.toString()));
-        if (eff) {
+        if (speed) {
+            box.setClickable(true);
+            box.setOnClickListener(v -> toggleSpeedUnit()); // 탭 → km/h·km ↔ mph·mi
+        } else if (eff) {
             box.setClickable(true);
             box.setOnClickListener(v -> toggleEffUnit());   // 탭 → km/kWh ↔ Wh/km
+        } else if (range) {
+            box.setClickable(true);
+            box.setOnClickListener(v -> toggleSpeedUnit()); // 탭 → km·km/h ↔ mi·mph
+        } else if (temp) {
+            box.setClickable(true);
+            box.setOnClickListener(v -> toggleTempUnit());  // 탭 → °C ↔ °F
         }
-        // 라벨 폭을 타일 폭에 맞춰 자동 축소가 한 줄로 동작하게
-        box.addView(lab, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        box.addView(val);
+        box.addView(centeredContent(lab, val, unitFooter), fillBox());
         vehValues.put(key, val);
-        if (speed) speedLabel = lab;
-        if (eff) effLabels.put(key, lab);
+        if (speed) speedLabel = unitFooter;   // footer 가 단위를 표시
+        if (range) rangeLabel = unitFooter;
+        if (eff) effLabels.put(key, unitFooter);
+        if (temp) tempUnitLabel = unitFooter;
 
-        if (speed) return buildSpeedTile(box, cached);
         if (!gear) return box;
 
         // 기어 타일: 흰 배경 + (뒤) 폴스타 차량 애니메이션 + (앞) 라벨/값
@@ -1391,13 +1539,16 @@ public class OverlayService extends Service {
         lab.setText(label);
         TextView val = valueText(side);
         CharSequence cached = cacheVeh.get(ShortcutStore.KEY_V_BATTERY);
-        val.setText(cached != null ? cached : "—");
-        box.addView(lab);
-        box.addView(val);
+        int pct = parsePct(cached);
+        val.setText(batteryText(pct));
+        TextView unitFooter = tileText(side * 0.15f, wLabel(), false);
+        unitFooter.setText("%");
+        unitFooter.setMaxLines(1);
+        unitFooter.setSingleLine(true);
+        box.addView(centeredContent(lab, val, unitFooter), fillBox());
         vehValues.put(ShortcutStore.KEY_V_BATTERY, val);   // % 텍스트 갱신
         tile.addView(box, new FrameLayout.LayoutParams(side, side));
 
-        int pct = parsePct(cached);
         if (pct >= 0) batteryBar.setPercent(pct);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
         lp.setMargins(d(5), d(3), d(5), d(3));
@@ -1417,62 +1568,12 @@ public class OverlayService extends Service {
         }
     }
 
-    /** 속도 타일: 흰 배경 + (뒤) 속도계 바늘 + (앞) 라벨/값 */
-    private View buildSpeedTile(LinearLayout box, CharSequence cached) {
-        int side = tileSide();
-        final float radius = side * CalendarTile.CORNER_RATIO;
-        FrameLayout tile = new FrameLayout(this);
-        tile.setClipToOutline(true);
-        tile.setOutlineProvider(new android.view.ViewOutlineProvider() {
-            public void getOutline(View v, android.graphics.Outline o) {
-                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
-            }
-        });
-        tile.setBackgroundColor(wBg());
-        speedGauge = new ImageView(this);                 // 원형 눈금 (고정)
-        speedGauge.setImageDrawable(new SpeedGauge());
-        speedGauge.setVisibility(View.GONE);
-        tile.addView(speedGauge, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        speedNeedle = new ImageView(this);                // 바늘 (회전)
-        speedNeedle.setImageDrawable(new SpeedNeedle());
-        speedNeedle.setVisibility(View.GONE);
-        tile.addView(speedNeedle, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        tile.addView(box, new FrameLayout.LayoutParams(side, side));
-
-        // 재생성 시 현재 속도 반영
-        int spd = parseIntSafe(cached);
-        if (spd >= 1) {
-            speedNeedle.setRotation(speedAngle(spd));
-            speedNeedle.setVisibility(View.VISIBLE);
-            speedGauge.setVisibility(View.VISIBLE);
-        }
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(side, side);
-        lp.setMargins(d(5), d(3), d(5), d(3));
-        tile.setLayoutParams(lp);
-        tile.setClickable(true);
-        tile.setOnClickListener(v -> toggleSpeedUnit());   // 탭 → km/h ↔ mph
-        return tile;
-    }
-
     private int parseIntSafe(CharSequence s) {
         if (s == null) return -1;
         try {
             return Integer.parseInt(s.toString().trim());
         } catch (Exception e) {
             return -1;
-        }
-    }
-
-    private void updateSpeedNeedle(float kmh) {
-        if (speedNeedle == null) return;
-        boolean show = kmh >= 1f;
-        speedNeedle.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (speedGauge != null) speedGauge.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (show) {
-            speedNeedle.animate().rotation(speedAngle(Math.round(kmh))).setDuration(180)
-                    .setInterpolator(new android.view.animation.LinearInterpolator()).start();
         }
     }
 
@@ -1485,8 +1586,8 @@ public class OverlayService extends Service {
         vehThread.start();
         final Handler sessionHandler = new Handler(vehThread.getLooper());
         vehHandler = sessionHandler;
-        // 속도 바늘 빠른 갱신 (~4.5Hz): 속도 위젯이 있을 때만
-        if (speedNeedle != null) {
+        // 속도 숫자 빠른 갱신 (~4.5Hz): 속도 위젯이 있을 때만
+        if (vehValues.containsKey(ShortcutStore.KEY_V_SPEED)) {
             sessionHandler.post(new Runnable() {
                 public void run() {
                     if (vehicle != sessionVehicle || vehHandler != sessionHandler) return;
@@ -1496,9 +1597,8 @@ public class OverlayService extends Service {
                             final float kmh = Math.abs(mps) * 3.6f;
                             ui.post(() -> {
                                 if (vehicle != sessionVehicle) return;
-                                updateSpeedNeedle(kmh);
                                 TextView tv = vehValues.get(ShortcutStore.KEY_V_SPEED);
-                                if (tv != null) tv.setText(speedNum(Math.round(kmh)));
+                                if (tv != null) tv.setText(speedText(Math.round(kmh)));
                                 cacheVeh.put(ShortcutStore.KEY_V_SPEED, String.valueOf(Math.round(kmh)));
                             });
                         }
@@ -1520,12 +1620,28 @@ public class OverlayService extends Service {
                         CharSequence cs;
                         if (v == null) {
                             CharSequence old = cacheVeh.get(e.getKey());
-                            cs = old != null ? old : "—";   // 일시적 null 이면 이전 값 유지
+                            if (old == null) e.getValue().setText("—");
+                            else if (ShortcutStore.KEY_V_BATTERY.equals(e.getKey()))
+                                e.getValue().setText(batteryText(parseIntSafe(old)));
+                            else if (ShortcutStore.KEY_V_RANGE.equals(e.getKey()))
+                                e.getValue().setText(rangeText(parseIntSafe(old)));
+                            else if (ShortcutStore.KEY_V_SPEED.equals(e.getKey()))
+                                e.getValue().setText(speedText(parseIntSafe(old)));
+                            else if (ShortcutStore.KEY_V_TEMP.equals(e.getKey()))
+                                e.getValue().setText(tempText(parseIntSafe(old)));
+                            else if (isEfficiencyKey(e.getKey()))
+                                e.getValue().setText(effNum(parseFloatSafe(old)));
+                            else e.getValue().setText(old);
+                            continue;   // 원본 캐시는 유지하고 표시만 현재 단위로 갱신
                         } else if (ShortcutStore.KEY_V_RANGE.equals(e.getKey())) {
-                            cs = withUnit(v, "km");
+                            cacheVeh.put(e.getKey(), v);              // 원본 km 캐시
+                            e.getValue().setText(rangeText(parseIntSafe(v)));
+                            continue;
                         } else if (ShortcutStore.KEY_V_BATTERY.equals(e.getKey())) {
-                            cs = withUnit(v, "%");
+                            cacheVeh.put(e.getKey(), v);
+                            e.getValue().setText(batteryText(parseIntSafe(v)));
                             if (batteryBar != null) batteryBar.setPercent(parseIntSafe(v));
+                            continue;
                         } else if (ShortcutStore.KEY_V_GEAR.equals(e.getKey())) {
                             cs = v;
                             e.getValue().setTextColor(gearColor(v));   // PRND 색상
@@ -1538,9 +1654,12 @@ public class OverlayService extends Service {
                             prevGear = v;
                         } else if (ShortcutStore.KEY_V_SPEED.equals(e.getKey())) {
                             int kmh = parseIntSafe(v);
-                            updateSpeedNeedle(kmh);
-                            cacheVeh.put(e.getKey(), v);              // 원본 km/h 캐시 (바늘/재생성용)
-                            e.getValue().setText(speedNum(kmh));      // 단위 변환해 표시
+                            cacheVeh.put(e.getKey(), v);              // 원본 km/h 캐시
+                            e.getValue().setText(speedText(kmh));     // 단위 변환해 표시
+                            continue;
+                        } else if (ShortcutStore.KEY_V_TEMP.equals(e.getKey())) {
+                            cacheVeh.put(e.getKey(), v);              // 원본 °C 캐시
+                            e.getValue().setText(tempText(parseIntSafe(v)));
                             continue;
                         } else if (isEfficiencyKey(e.getKey())) {
                             cacheVeh.put(e.getKey(), v);              // 원본 km/kWh 캐시
@@ -1618,11 +1737,11 @@ public class OverlayService extends Service {
         return wFg();
     }
 
-    /** 숫자 + 작은 단위 (예: 500 + 작은 km) */
-    private CharSequence withUnit(String number, String unit) {
+    /** 메인 값 뒤에 붙는 공통 보조 표시: 50% 크기 + 보조색. */
+    private CharSequence withSecondarySuffix(String number, String suffix) {
         android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(number);
         int start = sb.length();
-        sb.append(unit);
+        sb.append(suffix);
         sb.setSpan(new android.text.style.RelativeSizeSpan(0.5f), start, sb.length(),
                 android.text.Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
         sb.setSpan(new android.text.style.ForegroundColorSpan(wLabel()), start, sb.length(),
@@ -1651,7 +1770,7 @@ public class OverlayService extends Service {
         }
         if (vehValues.containsKey(ShortcutStore.KEY_V_TEMP)) {
             Integer t = vehicle.outsideTemp();
-            if (t != null) m.put(ShortcutStore.KEY_V_TEMP, t + "°");
+            if (t != null) m.put(ShortcutStore.KEY_V_TEMP, String.valueOf(t));
         }
         if (vehValues.containsKey(ShortcutStore.KEY_V_EFF)) {
             VehicleInfo.FloatSample power = vehicle.chargeRateSample();
@@ -2163,7 +2282,50 @@ public class OverlayService extends Service {
         return darkW() ? 0xFFB5BAC2 : 0xFF4E5157;
     }
 
-    // 속도 단위 (km/h ↔ mph)
+    // 온도 단위 (°C ↔ °F)
+    private boolean tempFahrenheit() {
+        return sp.getBoolean(ShortcutStore.KEY_TEMP_FAHRENHEIT, false);
+    }
+
+    private CharSequence batteryText(int percent) {
+        if (percent < 0) return "—";
+        String number = String.valueOf(percent);
+        return widgetCleanMode() ? withSecondarySuffix(number, "%") : number;
+    }
+
+    private String tempUnit() {
+        return tempFahrenheit() ? "°F" : "°C";
+    }
+
+    /** 외기온도는 클린 모드에서만 메인 값에 작은 단위를 붙인다. */
+    private CharSequence tempText(int celsius) {
+        int value = tempFahrenheit() ? Math.round(celsius * 9f / 5f + 32f) : celsius;
+        String number = String.valueOf(value);
+        return widgetCleanMode() ? withSecondarySuffix(number, tempUnit()) : number;
+    }
+
+    /** 날씨 위젯은 숫자와 단위를 항상 같은 크기·색으로 표시한다. */
+    private CharSequence weatherTempText(int celsius) {
+        int value = tempFahrenheit() ? Math.round(celsius * 9f / 5f + 32f) : celsius;
+        if (widgetCleanMode()) return value + "°";
+        return value + (tempFahrenheit() ? "°F" : "°C");
+    }
+
+    /** 온도 단위 전환은 독을 재구성하지 않고 날씨와 외기온도 값만 바꾼다. */
+    private void updateTempUnitUi() {
+        if (tempView != null && cacheTempC != null)
+            tempView.setText(weatherTempText(cacheTempC));
+        if (tempUnitLabel != null) tempUnitLabel.setText(tempUnit());
+        TextView outside = vehValues.get(ShortcutStore.KEY_V_TEMP);
+        CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_TEMP);
+        if (outside != null && raw != null) outside.setText(tempText(parseIntSafe(raw)));
+    }
+
+    private void toggleTempUnit() {
+        sp.edit().putBoolean(ShortcutStore.KEY_TEMP_FAHRENHEIT, !tempFahrenheit()).apply();
+    }
+
+    // 속도·거리 단위 (km/h·km ↔ mph·mi)
     private boolean speedMph() {
         return sp.getBoolean(ShortcutStore.KEY_SPEED_MPH, false);
     }
@@ -2172,46 +2334,66 @@ public class OverlayService extends Service {
         return speedMph() ? "mph" : "km/h";
     }
 
-    private CharSequence vehicleUnitLabel(boolean speed, String efficiencyName) {
-        String name = speed ? "속도" : efficiencyName;
-        String unit = speed ? speedUnit() : effUnit();
-        android.text.SpannableString text = new android.text.SpannableString(name + unit);
-        text.setSpan(new android.text.style.RelativeSizeSpan(0.62f), name.length(), text.length(),
-                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return text;
-    }
-
-    /** 속도 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
-    private void updateSpeedUnitUi() {
-        if (speedLabel != null) speedLabel.setText(vehicleUnitLabel(true, ""));
+    /** 단위 전환은 독을 재구성하지 않고 속도와 주행가능거리를 함께 바꾼다. */
+    private void updateDistanceUnitUi() {
+        if (speedLabel != null) speedLabel.setText(speedUnit());   // footer 단위 갱신
+        if (rangeLabel != null) rangeLabel.setText(rangeUnit());
         TextView value = vehValues.get(ShortcutStore.KEY_V_SPEED);
         CharSequence raw = cacheVeh.get(ShortcutStore.KEY_V_SPEED);
-        if (value != null && raw != null) value.setText(speedNum(parseIntSafe(raw)));
+        if (value != null && raw != null) value.setText(speedText(parseIntSafe(raw)));
+        TextView range = vehValues.get(ShortcutStore.KEY_V_RANGE);
+        CharSequence rangeRaw = cacheVeh.get(ShortcutStore.KEY_V_RANGE);
+        if (range != null && rangeRaw != null)
+            range.setText(rangeText(parseIntSafe(rangeRaw)));
+        updateEffUnitUi();
     }
 
     /** km/h 정수를 현재 단위 문자열로 변환 */
     private String speedNum(int kmh) {
         if (kmh < 0) return "—";
-        return String.valueOf(speedMph() ? Math.round(kmh * 0.621371f) : kmh);
+        return String.valueOf(speedMph() ? Math.round(kmh * KM_TO_MILE) : kmh);
+    }
+
+    private CharSequence speedText(int kmh) {
+        String number = speedNum(kmh);
+        String cleanUnit = speedMph() ? "mph" : "kph";
+        return withCleanSuffix(number, cleanUnit);
+    }
+
+    private String rangeUnit() {
+        return speedMph() ? "mi" : "km";
+    }
+
+    /** km 정수를 현재 거리 단위의 숫자로 변환한다. */
+    private String rangeNum(int km) {
+        if (km < 0) return "—";
+        int value = speedMph() ? Math.round(km * KM_TO_MILE) : km;
+        return String.valueOf(value);
+    }
+
+    private CharSequence rangeText(int km) {
+        String number = rangeNum(km);
+        return withCleanSuffix(number, rangeUnit());
     }
 
     private void toggleSpeedUnit() {
         sp.edit().putBoolean(ShortcutStore.KEY_SPEED_MPH, !speedMph()).apply();
     }
 
-    // 전비 단위 (km/kWh ↔ Wh/km)
+    // 전비 형식 (거리/kWh ↔ kWh/100거리): 클릭 전환은 유지하고 거리 단위를 따른다.
     private boolean effWhkm() {
         return sp.getBoolean(ShortcutStore.KEY_EFF_WHKM, false);
     }
 
     private String effUnit() {
-        return effWhkm() ? "kWh/100km" : "km/kWh";
+        if (effWhkm()) return speedMph() ? "kWh/100 mi" : "kWh/100 km";
+        return speedMph() ? "mi/kWh" : "km/kWh";
     }
 
     /** 전비 단위 전환은 독을 재구성하지 않고 라벨과 숫자만 바꾼다. */
     private void updateEffUnitUi() {
         for (Map.Entry<String, TextView> entry : effLabels.entrySet()) {
-            entry.getValue().setText(vehicleUnitLabel(false, efficiencyName(entry.getKey())));
+            entry.getValue().setText(effUnit());   // footer 단위 갱신
             TextView value = vehValues.get(entry.getKey());
             CharSequence raw = cacheVeh.get(entry.getKey());
             if (value != null && raw != null) value.setText(effNum(parseFloatSafe(raw)));
@@ -2229,9 +2411,10 @@ public class OverlayService extends Service {
     /** km/kWh 실수를 현재 단위 문자열로 */
     private String effNum(float kmPerKwh) {
         if (kmPerKwh <= 0) return "—";
+        float distancePerKwh = speedMph() ? kmPerKwh * KM_TO_MILE : kmPerKwh;
         return effWhkm()
-                ? String.format(java.util.Locale.US, "%.1f", 100f / kmPerKwh)  // kWh/100km
-                : String.format(java.util.Locale.US, "%.1f", kmPerKwh);
+                ? String.format(java.util.Locale.US, "%.1f", 100f / distancePerKwh)
+                : String.format(java.util.Locale.US, "%.1f", distancePerKwh);
     }
 
     private float parseFloatSafe(CharSequence s) {
@@ -2249,9 +2432,21 @@ public class OverlayService extends Service {
 
     private void applyDockBackground(LinearLayout bar, boolean grid) {
         if (!grid) {
-            barBg.setColor(0xDD111111);
-            barBg.setStroke(d(1), 0x55FFFFFF);
+            String backgroundMode = sp.getString(ShortcutStore.KEY_DOCK_BG_MODE, "default");
+            int color = "color".equals(backgroundMode)
+                    ? sp.getInt(ShortcutStore.KEY_DOCK_BG_COLOR,
+                            ShortcutStore.DEFAULT_DOCK_BG_COLOR) | 0xFF000000
+                    : ShortcutStore.DEFAULT_DOCK_BG_COLOR;
+            barBg.setColor(color);
+            int borderWidth = Math.max(0, Math.min(10,
+                    sp.getInt(ShortcutStore.KEY_DOCK_BORDER_WIDTH,
+                            ShortcutStore.DEFAULT_DOCK_BORDER_WIDTH)));
+            int borderColor = sp.getInt(ShortcutStore.KEY_DOCK_BORDER_COLOR,
+                    ShortcutStore.DEFAULT_DOCK_BORDER_COLOR);
+            barBg.setStroke(borderWidth == 0 ? 0 : d(borderWidth), borderColor);
             bar.setBackground(barBg);
+            barBg.invalidateSelf();
+            bar.invalidate();
             return;
         }
 
@@ -2264,14 +2459,15 @@ public class OverlayService extends Service {
             String alignX = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_X, "center");
             String alignY = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y, "bottom");
             String backdrop = sp.getString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
+            int rotation = sp.getInt(ShortcutStore.KEY_GRID_PHOTO_ROTATION, 0);
             int color = sp.getInt(ShortcutStore.KEY_GRID_BG_COLOR,
                     ShortcutStore.DEFAULT_GRID_BG_COLOR) | 0xFF000000;
             String config = sizeMode + '|' + alignX + '|' + alignY + '|'
-                    + backdrop + '|' + color;
+                    + backdrop + '|' + color + '|' + rotation;
             if (gridPhotoBackground == null || gridPhotoModified != modified
                     || !config.equals(gridPhotoConfig)) {
                 gridPhotoBackground = GridBackgroundDrawable.load(photo, sizeMode,
-                        alignX, alignY, backdrop, color);
+                        alignX, alignY, backdrop, color, rotation);
                 gridPhotoModified = modified;
                 gridPhotoConfig = config;
             }

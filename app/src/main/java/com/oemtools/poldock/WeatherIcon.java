@@ -1,8 +1,10 @@
 package com.oemtools.poldock;
 
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 
@@ -22,6 +24,9 @@ public class WeatherIcon extends Drawable {
 
     private final Kind kind;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint outputPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private Bitmap rendered;
+    private Rect renderedContent;
 
     public WeatherIcon(Kind kind) {
         this.kind = kind;
@@ -46,6 +51,47 @@ public class WeatherIcon extends Drawable {
     @Override
     public void draw(Canvas c) {
         int w = getBounds().width(), h = getBounds().height();
+        if (w <= 0 || h <= 0) return;
+        ensureRendered(w, h);
+        if (rendered == null || renderedContent == null || renderedContent.isEmpty()) return;
+
+        float inset = Math.max(1f, Math.min(w, h) * 0.03f);
+        float availableW = Math.max(1f, w - inset * 2f);
+        float availableH = Math.max(1f, h - inset * 2f);
+        float scale = Math.min(availableW / renderedContent.width(),
+                availableH / renderedContent.height());
+        float drawW = renderedContent.width() * scale;
+        float drawH = renderedContent.height() * scale;
+        float left = getBounds().left + (w - drawW) / 2f;
+        float top = getBounds().top + (h - drawH) / 2f;
+        RectF destination = new RectF(left, top, left + drawW, top + drawH);
+        c.drawBitmap(rendered, renderedContent, destination, outputPaint);
+    }
+
+    private void ensureRendered(int w, int h) {
+        if (rendered != null && rendered.getWidth() == w && rendered.getHeight() == h) return;
+        rendered = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        drawRaw(new Canvas(rendered), w, h);
+
+        int[] pixels = new int[w * h];
+        rendered.getPixels(pixels, 0, w, 0, 0, w, h);
+        int left = w, top = h, right = -1, bottom = -1;
+        for (int y = 0; y < h; y++) {
+            int row = y * w;
+            for (int x = 0; x < w; x++) {
+                if ((pixels[row + x] >>> 24) <= 8) continue;
+                if (x < left) left = x;
+                if (x > right) right = x;
+                if (y < top) top = y;
+                if (y > bottom) bottom = y;
+            }
+        }
+        renderedContent = right >= left && bottom >= top
+                ? new Rect(left, top, right + 1, bottom + 1)
+                : new Rect();
+    }
+
+    private void drawRaw(Canvas c, int w, int h) {
         float u = Math.min(w, h);
         float cx = w / 2f, cy = h / 2f;
 
@@ -152,12 +198,14 @@ public class WeatherIcon extends Drawable {
 
     @Override
     public void setAlpha(int alpha) {
-        p.setAlpha(alpha);
+        outputPaint.setAlpha(alpha);
+        invalidateSelf();
     }
 
     @Override
     public void setColorFilter(android.graphics.ColorFilter cf) {
-        p.setColorFilter(cf);
+        outputPaint.setColorFilter(cf);
+        invalidateSelf();
     }
 
     @Override

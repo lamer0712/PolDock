@@ -40,10 +40,20 @@ public class ShortcutStore {
     static final int DEFAULT_SCALE = 150;
     static final String KEY_ALPHA = "dock_alpha"; // 불투명도 퍼센트 20~100
     static final int DEFAULT_ALPHA = 100;
+    static final String KEY_DOCK_BG_MODE = "dock_bg_mode"; // default/color (가로·세로 독)
+    static final String KEY_DOCK_BG_COLOR = "dock_bg_color";
+    static final int DEFAULT_DOCK_BG_COLOR = 0xDD111111;
+    static final String KEY_DOCK_BORDER_COLOR = "dock_border_color";
+    static final String KEY_DOCK_BORDER_WIDTH = "dock_border_width"; // dp, 0이면 없음
+    static final int DEFAULT_DOCK_BORDER_COLOR = 0x55FFFFFF;
+    static final int DEFAULT_DOCK_BORDER_WIDTH = 1;
     static final String KEY_AUTOSTART = "autostart"; // 시동(부팅) 시 자동 실행
     static final String KEY_DARK = "widget_dark";    // 위젯 다크 모드 (바로가기는 제외)
-    static final String KEY_SPEED_MPH = "speed_mph"; // 속도 단위: true=mph, false=km/h
-    static final String KEY_EFF_WHKM = "eff_whkm";   // 전비 단위: true=Wh/km, false=km/kWh
+    static final String KEY_WIDGET_HEADER_ON = "widget_header_on"; // 위젯 상단 라벨 표시
+    static final String KEY_WIDGET_FOOTER_ON = "widget_footer_on"; // 위젯 하단 정보 표시
+    static final String KEY_TEMP_FAHRENHEIT = "temp_fahrenheit"; // 온도 단위: true=°F, false=°C
+    static final String KEY_SPEED_MPH = "speed_mph"; // 속도/거리 단위: true=mph·mi, false=km/h·km
+    static final String KEY_EFF_WHKM = "eff_whkm";   // 전비 형식: true=에너지/100거리, false=거리/kWh
     static final String KEY_WIDGET_ORDER = "widget_order";
     static final String KEY_HOME_PROFILE = "home_profile"; // 홈(런처)에서 별도 배치 사용
     static final String KEY_EDIT_MODE = "edit_mode";       // 설정 편집 대상: auto/default/home
@@ -57,6 +67,7 @@ public class ShortcutStore {
     static final String KEY_GRID_PHOTO_ALIGN_X = "grid_photo_align_x"; // left/center/right
     static final String KEY_GRID_PHOTO_ALIGN_Y = "grid_photo_align_y"; // top/center/bottom
     static final String KEY_GRID_PHOTO_BACKDROP = "grid_photo_backdrop"; // color/blur
+    static final String KEY_GRID_PHOTO_ROTATION = "grid_photo_rotation"; // 0/90/180/270
     static final int DEFAULT_GRID_BG_COLOR = 0xFF141516;
 
     static final String DEFAULT_DATE_FMT = "M월 d일 (E)";

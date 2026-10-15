@@ -103,7 +103,8 @@ public class EditPanel {
                 // 드래그 좌표/크기 슬라이더는 패널을 다시 그리지 않음 (슬라이더 끊김 방지)
                 if ("x".equals(k) || "y".equals(k)
                         || k.startsWith(ShortcutStore.KEY_SCALE)
-                        || ShortcutStore.KEY_ALPHA.equals(k)) return;
+                        || ShortcutStore.KEY_ALPHA.equals(k)
+                        || ShortcutStore.KEY_DOCK_BORDER_WIDTH.equals(k)) return;
                 populate();
             };
 
@@ -414,15 +415,19 @@ public class EditPanel {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = Ui.dp(c, 4);
             tabContent.addView(seek, lp);
-        }
 
-        // 투명도 (가로/세로 전용 — 그리드는 항상 불투명 고정, 꺼짐은 해당 없음)
-        if ("g".equals(ori) || OverlayService.ORI_OFF.equals(ori)) {
-            return card;
+            addDockAlphaControl(tabContent);
+            addDockBackgroundControls(tabContent);
         }
+        return card;
+    }
+
+    /** 가로·세로 독의 크기 바로 아래에 표시되는 불투명도 조절. */
+    private void addDockAlphaControl(LinearLayout card) {
+        Context c = svc;
         int apct = sp.getInt(ShortcutStore.KEY_ALPHA, ShortcutStore.DEFAULT_ALPHA);
         final TextView alphaLabel = Ui.fieldLabel(c, "독 불투명도: " + apct + "%");
-        tabContent.addView(alphaLabel);
+        card.addView(alphaLabel);
         SeekBar aseek = new SeekBar(c);
         aseek.setMax(80);                               // 20~100 → 0~80
         aseek.setProgress(Math.max(0, Math.min(80, apct - 20)));
@@ -441,8 +446,65 @@ public class EditPanel {
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         alp.topMargin = Ui.dp(c, 4);
-        tabContent.addView(aseek, alp);
-        return card;
+        card.addView(aseek, alp);
+    }
+
+    /** 가로·세로 독의 컨테이너 배경색. 그리드 배경 설정과는 별도로 저장한다. */
+    private void addDockBackgroundControls(LinearLayout card) {
+        Context c = svc;
+        String mode = sp.getString(ShortcutStore.KEY_DOCK_BG_MODE, "default");
+        int color = sp.getInt(ShortcutStore.KEY_DOCK_BG_COLOR,
+                ShortcutStore.DEFAULT_DOCK_BG_COLOR) | 0xFF000000;
+        card.addView(Ui.fieldLabel(c, "배경"));
+        card.addView(Ui.tabs(c,
+                Ui.tab(c, "기본색", "default".equals(mode),
+                        v -> sp.edit().putString(
+                                ShortcutStore.KEY_DOCK_BG_MODE, "default").apply()),
+                Ui.tab(c, "배경색", "color".equals(mode),
+                        v -> showDockColorDialog(false))));
+
+        if ("color".equals(mode)) {
+            LinearLayout details = Ui.tabContent(c);
+            TextView colorButton = Ui.button(c, "색상 변경", color,
+                    v -> showDockColorDialog(false));
+            setReadableButtonText(colorButton, color);
+            details.addView(colorButton);
+            card.addView(details);
+        }
+
+        int borderColor = sp.getInt(ShortcutStore.KEY_DOCK_BORDER_COLOR,
+                ShortcutStore.DEFAULT_DOCK_BORDER_COLOR);
+        TextView borderColorButton = Ui.button(c, "테두리색", borderColor,
+                v -> showDockColorDialog(true));
+        setReadableButtonText(borderColorButton, borderColor);
+        LinearLayout borderDetails = Ui.tabContent(c);
+        borderDetails.addView(borderColorButton);
+        card.addView(borderDetails);
+
+        int borderWidth = Math.max(0, Math.min(10,
+                sp.getInt(ShortcutStore.KEY_DOCK_BORDER_WIDTH,
+                        ShortcutStore.DEFAULT_DOCK_BORDER_WIDTH)));
+        TextView borderWidthLabel = Ui.fieldLabel(c, borderWidth == 0
+                ? "테두리 두께: 0 (없음)" : "테두리 두께: " + borderWidth);
+        card.addView(borderWidthLabel);
+        SeekBar borderWidthSeek = new SeekBar(c);
+        borderWidthSeek.setMax(10);
+        borderWidthSeek.setProgress(borderWidth);
+        borderWidthSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                borderWidthLabel.setText(progress == 0
+                        ? "테두리 두께: 0 (없음)" : "테두리 두께: " + progress);
+                if (sp.getInt(ShortcutStore.KEY_DOCK_BORDER_WIDTH,
+                        ShortcutStore.DEFAULT_DOCK_BORDER_WIDTH) != progress) {
+                    sp.edit().putInt(ShortcutStore.KEY_DOCK_BORDER_WIDTH, progress).apply();
+                }
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+        card.addView(borderWidthSeek);
     }
 
     private View gridPositionOption(String description, String value, String current) {
@@ -500,7 +562,25 @@ public class EditPanel {
         String alignY = sp.getString(ShortcutStore.KEY_GRID_PHOTO_ALIGN_Y, "bottom");
         String backdrop = sp.getString(ShortcutStore.KEY_GRID_PHOTO_BACKDROP, "color");
 
-        card.addView(Ui.button(c, "사진 변경", Ui.GREY, v -> launchPhotoPicker()));
+        LinearLayout photoActions = new LinearLayout(c);
+        photoActions.setOrientation(LinearLayout.HORIZONTAL);
+        photoActions.setGravity(Gravity.CENTER_VERTICAL);
+        View changePhoto = Ui.button(c, "사진 변경", Ui.GREY, v -> launchPhotoPicker());
+        photoActions.addView(changePhoto, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView rotatePhoto = Ui.button(c, "⟳", Ui.GREY,
+                v -> rotateGridPhotoClockwise());
+        rotatePhoto.setTextSize(28);
+        rotatePhoto.setGravity(Gravity.CENTER);
+        rotatePhoto.setIncludeFontPadding(false);
+        rotatePhoto.setPadding(0, 0, 0, 0);
+        rotatePhoto.setTypeface(android.graphics.Typeface.DEFAULT);
+        rotatePhoto.setContentDescription("오른쪽으로 90도 회전");
+        LinearLayout.LayoutParams rotateLp = new LinearLayout.LayoutParams(
+                Ui.dp(c, 52), Ui.dp(c, 52));
+        rotateLp.leftMargin = Ui.dp(c, 10);
+        photoActions.addView(rotatePhoto, rotateLp);
+        card.addView(photoActions);
         card.addView(Ui.fieldLabel(c, "크기"));
         card.addView(Ui.rowGap(c,
                 photoOption("맞춤", ShortcutStore.KEY_GRID_PHOTO_SIZE, "fit", size),
@@ -543,6 +623,12 @@ public class EditPanel {
     private View photoOption(String label, String key, String value, String current) {
         return Ui.button(svc, label, value.equals(current) ? Ui.ACCENT : Ui.GREY,
                 v -> sp.edit().putString(key, value).apply());
+    }
+
+    private void rotateGridPhotoClockwise() {
+        int current = sp.getInt(ShortcutStore.KEY_GRID_PHOTO_ROTATION, 0);
+        sp.edit().putInt(ShortcutStore.KEY_GRID_PHOTO_ROTATION,
+                (current + 90) % 360).apply();
     }
 
     private View photoAlignmentOption(String description, String axis, String key,
@@ -625,6 +711,88 @@ public class EditPanel {
         dialog.show();
     }
 
+    private void showDockColorDialog(boolean border) {
+        Context c = svc;
+        int initial = border
+                ? sp.getInt(ShortcutStore.KEY_DOCK_BORDER_COLOR,
+                        ShortcutStore.DEFAULT_DOCK_BORDER_COLOR)
+                : sp.getInt(ShortcutStore.KEY_DOCK_BG_COLOR,
+                        ShortcutStore.DEFAULT_DOCK_BG_COLOR);
+        initial |= 0xFF000000;
+        int[] rgb = {Color.red(initial), Color.green(initial), Color.blue(initial)};
+
+        LinearLayout panel = new LinearLayout(c);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        int pad = Ui.dp(c, 20);
+        panel.setPadding(pad, Ui.dp(c, 8), pad, Ui.dp(c, 8));
+        View preview = new View(c);
+        preview.setBackground(Ui.round(initial, Ui.dp(c, 8)));
+        panel.addView(preview, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(c, 72)));
+
+        TextView redLabel = Ui.fieldLabel(c, "R  " + rgb[0]);
+        TextView greenLabel = Ui.fieldLabel(c, "G  " + rgb[1]);
+        TextView blueLabel = Ui.fieldLabel(c, "B  " + rgb[2]);
+        SeekBar red = colorSeek(c, 255, rgb[0]);
+        SeekBar green = colorSeek(c, 255, rgb[1]);
+        SeekBar blue = colorSeek(c, 255, rgb[2]);
+        panel.addView(redLabel);
+        panel.addView(red);
+        panel.addView(greenLabel);
+        panel.addView(green);
+        panel.addView(blueLabel);
+        panel.addView(blue);
+
+        SeekBar.OnSeekBarChangeListener listener = new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                rgb[0] = red.getProgress();
+                rgb[1] = green.getProgress();
+                rgb[2] = blue.getProgress();
+                redLabel.setText("R  " + rgb[0]);
+                greenLabel.setText("G  " + rgb[1]);
+                blueLabel.setText("B  " + rgb[2]);
+                preview.setBackground(Ui.round(
+                        Color.rgb(rgb[0], rgb[1], rgb[2]), Ui.dp(c, 8)));
+            }
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        };
+        red.setOnSeekBarChangeListener(listener);
+        green.setOnSeekBarChangeListener(listener);
+        blue.setOnSeekBarChangeListener(listener);
+
+        AlertDialog dialog = new AlertDialog.Builder(c)
+                .setTitle(border ? "독 테두리색" : "독 배경색")
+                .setView(panel)
+                .setPositiveButton("적용", (d, w) -> {
+                    SharedPreferences.Editor editor = sp.edit();
+                    int selected = Color.rgb(rgb[0], rgb[1], rgb[2]);
+                    if (border) {
+                        editor.putInt(ShortcutStore.KEY_DOCK_BORDER_COLOR, selected);
+                    } else {
+                        editor.putInt(ShortcutStore.KEY_DOCK_BG_COLOR, selected)
+                                .putString(ShortcutStore.KEY_DOCK_BG_MODE, "color");
+                    }
+                    editor.apply();
+                })
+                .setNegativeButton("취소", null)
+                .create();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE);
+        }
+        dialog.show();
+    }
+
+    private void setReadableButtonText(TextView button, int color) {
+        double luminance = Color.red(color) * 0.299
+                + Color.green(color) * 0.587 + Color.blue(color) * 0.114;
+        button.setTextColor(luminance > 170 ? Color.BLACK : Color.WHITE);
+    }
+
     private SeekBar colorSeek(Context c, int max, int progress) {
         SeekBar seek = new SeekBar(c);
         seek.setMax(max);
@@ -700,6 +868,33 @@ public class EditPanel {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         headerLp.bottomMargin = Ui.dp(c, 8);
         card.addView(header, headerLp);
+
+        boolean widgetHeaderOn = sp.getBoolean(ShortcutStore.KEY_WIDGET_HEADER_ON, true);
+        LinearLayout headerOption = listRow();
+        TextView headerOptionName = new TextView(c);
+        headerOptionName.setText("헤더");
+        headerOptionName.setTextColor(Ui.TEXT);
+        headerOptionName.setTextSize(16);
+        headerOption.addView(headerOptionName, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        headerOption.addView(Ui.toggleIndicator(c, widgetHeaderOn));
+        headerOption.setOnClickListener(v -> sp.edit()
+                .putBoolean(ShortcutStore.KEY_WIDGET_HEADER_ON, !widgetHeaderOn).apply());
+        card.addView(headerOption);
+
+        boolean widgetFooterOn = sp.getBoolean(ShortcutStore.KEY_WIDGET_FOOTER_ON, true);
+        LinearLayout footerOption = listRow();
+        TextView footerOptionName = new TextView(c);
+        footerOptionName.setText("푸터");
+        footerOptionName.setTextColor(Ui.TEXT);
+        footerOptionName.setTextSize(16);
+        footerOption.addView(footerOptionName, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        footerOption.addView(Ui.toggleIndicator(c, widgetFooterOn));
+        footerOption.setOnClickListener(v -> sp.edit()
+                .putBoolean(ShortcutStore.KEY_WIDGET_FOOTER_ON, !widgetFooterOn).apply());
+        card.addView(footerOption);
+
         final List<String> order = ShortcutStore.widgetOrder(c);
         for (int i = 0; i < order.size(); i++) {
             final String id = order.get(i);

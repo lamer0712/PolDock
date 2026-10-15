@@ -78,6 +78,7 @@ public class GridBackgroundPickerActivity extends Activity {
         }
         getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE).edit()
                 .putString(ShortcutStore.KEY_GRID_BG_MODE, "photo")
+                .putInt(ShortcutStore.KEY_GRID_PHOTO_ROTATION, 0)
                 .apply();
         returnToEditor();
         finish();

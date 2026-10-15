@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -43,7 +44,8 @@ final class GridBackgroundDrawable extends Drawable {
     }
 
     static GridBackgroundDrawable load(File file, String sizeMode, String alignX,
-                                       String alignY, String backdrop, int backgroundColor) {
+                                       String alignY, String backdrop, int backgroundColor,
+                                       int rotation) {
         if (file == null || !file.isFile()) return null;
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
@@ -57,8 +59,24 @@ final class GridBackgroundDrawable extends Drawable {
         options.inSampleSize = sample;
         options.inPreferredConfig = Bitmap.Config.ARGB_8888;
         Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+        int originalWidth = bounds.outWidth;
+        int originalHeight = bounds.outHeight;
+        int normalizedRotation = ((rotation % 360) + 360) % 360;
+        if (bitmap != null && normalizedRotation != 0) {
+            Matrix matrix = new Matrix();
+            matrix.postRotate(normalizedRotation);
+            Bitmap rotated = Bitmap.createBitmap(bitmap, 0, 0,
+                    bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            if (rotated != bitmap) bitmap.recycle();
+            bitmap = rotated;
+            if (normalizedRotation == 90 || normalizedRotation == 270) {
+                int swap = originalWidth;
+                originalWidth = originalHeight;
+                originalHeight = swap;
+            }
+        }
         return bitmap == null ? null : new GridBackgroundDrawable(bitmap,
-                bounds.outWidth, bounds.outHeight, sizeMode, alignX, alignY,
+                originalWidth, originalHeight, sizeMode, alignX, alignY,
                 backdrop, backgroundColor);
     }
 
