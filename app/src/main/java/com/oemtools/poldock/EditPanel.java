@@ -11,7 +11,9 @@ import android.graphics.Point;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.DragEvent;
 import android.view.KeyEvent;
@@ -19,6 +21,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -105,7 +108,10 @@ public class EditPanel {
                         || k.startsWith(ShortcutStore.KEY_SCALE)
                         || ShortcutStore.KEY_ALPHA.equals(k)
                         || ShortcutStore.KEY_DOCK_BORDER_WIDTH.equals(k)) return;
-                populate();
+                LinearLayout target = body;
+                target.post(() -> {
+                    if (showing && body == target) populate();
+                });
             };
 
     EditPanel(OverlayService svc) {
@@ -317,6 +323,7 @@ public class EditPanel {
 
         body.addView(buildLayoutCard());
         body.addView(buildWidgetCard());
+        body.addView(buildParkingPhotoCard());
         body.addView(buildShortcutCard());
 
         // 독 끄기
@@ -926,6 +933,126 @@ public class EditPanel {
         transition.setDuration(120);
         card.setLayoutTransition(transition);
         return card;
+    }
+
+    private View buildParkingPhotoCard() {
+        Context c = svc;
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionLabel(c, "주차 사진"));
+
+        boolean supported = SecureTokenStore.isSupported();
+        boolean tokenSaved = SecureTokenStore.hasToken(c);
+        boolean enabled = sp.getBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, false);
+
+        LinearLayout enabledRow = listRow();
+        TextView enabledName = new TextView(c);
+        enabledName.setText("D/R → P 전환 시 촬영·전송");
+        enabledName.setTextColor(supported ? Ui.TEXT : Ui.DIM);
+        enabledName.setTextSize(16);
+        enabledRow.addView(enabledName, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        enabledRow.addView(Ui.toggleIndicator(c, enabled));
+        enabledRow.setOnClickListener(v -> {
+            if (!supported) {
+                android.widget.Toast.makeText(c, "Android 6 이상에서 사용할 수 있습니다.",
+                        android.widget.Toast.LENGTH_LONG).show();
+            } else if (!enabled && !SecureTokenStore.hasToken(c)) {
+                showMyBoxTokenDialog(true);
+            } else {
+                sp.edit().putBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, !enabled).apply();
+            }
+        });
+        card.addView(enabledRow);
+
+        card.addView(Ui.fieldLabel(c,
+                "Camera ID 0으로 사진 한 장을 찍어 MYBOX 루트에 전송합니다. "
+                        + "파일명은 PolDock_parking_날짜_시간.jpg 형식입니다."));
+
+        TextView tokenButton = Ui.button(c,
+                tokenSaved ? "MYBOX 토큰 변경" : "MYBOX 토큰 등록",
+                tokenSaved ? Ui.GREY : Ui.ACCENT,
+                v -> showMyBoxTokenDialog(false));
+        tokenButton.setEnabled(supported);
+        tokenButton.setAlpha(supported ? 1f : 0.45f);
+        LinearLayout.LayoutParams buttonLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        buttonLp.topMargin = Ui.dp(c, 10);
+        card.addView(tokenButton, buttonLp);
+
+        TextView guide = Ui.button(c, "토큰 발급 방법", Ui.GREY, v -> {
+            Intent intent = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://developers.mybox.naver.com/getting-started"));
+            launchAndClose(intent);
+        });
+        LinearLayout.LayoutParams guideLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        guideLp.topMargin = Ui.dp(c, 8);
+        card.addView(guide, guideLp);
+
+        if (tokenSaved) {
+            TextView test = Ui.button(c, "지금 촬영·전송", Ui.GREEN,
+                    v -> svc.testParkingPhoto());
+            LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            testLp.topMargin = Ui.dp(c, 8);
+            card.addView(test, testLp);
+        }
+
+        String status = sp.getString(ParkingPhotoManager.KEY_STATUS, "아직 촬영 기록이 없습니다.");
+        card.addView(Ui.fieldLabel(c, "상태 · " + status));
+        return card;
+    }
+
+    private void showMyBoxTokenDialog(boolean enableAfterSave) {
+        Context c = svc;
+        if (!SecureTokenStore.isSupported()) {
+            android.widget.Toast.makeText(c, "Android 6 이상에서 사용할 수 있습니다.",
+                    android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        EditText token = Ui.field(c, "mbx_pat_…");
+        token.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        token.setSingleLine(true);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(c)
+                .setTitle("MYBOX 개인 액세스 토큰")
+                .setMessage("토큰은 Android Keystore로 암호화해 이 기기에만 저장합니다.")
+                .setView(token)
+                .setPositiveButton("저장", (dialog, which) -> {
+                    String value = token.getText().toString().trim();
+                    if (value.isEmpty()) {
+                        android.widget.Toast.makeText(c, "토큰을 입력하세요.",
+                                android.widget.Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (SecureTokenStore.save(c, value)) {
+                        SharedPreferences.Editor editor = sp.edit();
+                        if (enableAfterSave) {
+                            editor.putBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, true);
+                        }
+                        editor.putString(ParkingPhotoManager.KEY_STATUS, "촬영 준비됨").apply();
+                    } else {
+                        android.widget.Toast.makeText(c, "토큰을 안전하게 저장하지 못했습니다.",
+                                android.widget.Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("취소", null);
+        if (SecureTokenStore.hasToken(c)) {
+            builder.setNeutralButton("토큰 삭제", (dialog, which) -> {
+                SecureTokenStore.clear(c);
+                sp.edit().putBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, false)
+                        .putString(ParkingPhotoManager.KEY_STATUS, "MYBOX 토큰이 삭제됨")
+                        .apply();
+            });
+        }
+        AlertDialog dialog = builder.create();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setType(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE);
+        }
+        dialog.show();
     }
 
     private boolean startWidgetDrag(View row, View handle, String id, LinearLayout container,

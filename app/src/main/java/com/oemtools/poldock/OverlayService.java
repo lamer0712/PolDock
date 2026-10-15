@@ -159,6 +159,8 @@ public class OverlayService extends Service {
 
     private VehicleInfo vehicle;
     private EfficiencyTracker efficiencyTracker;
+    private ParkingPhotoManager parkingPhotoManager;
+    private String lastObservedGear;
     private HandlerThread vehThread;
     private Handler vehHandler;
     private android.view.GestureDetector handleGesture;
@@ -214,6 +216,7 @@ public class OverlayService extends Service {
                     return;
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
+                if (ParkingPhotoManager.isInternalPreference(key)) return;
                 if (UpdateManager.isInternalPreference(key)) return;
                 if (HolidayStore.isInternalPreference(key)) return;   // 공휴일 캐시는 재구성 불필요
                 if (EfficiencyTracker.isInternalPreference(key)) return;
@@ -275,6 +278,7 @@ public class OverlayService extends Service {
         super.onCreate();
         isRunning = true;
         sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
+        parkingPhotoManager = new ParkingPhotoManager(this);
         cacheDong = sp.getString("weather_area_name", null);
         cacheDongLat = parseDoubleOrNaN(sp.getString("weather_area_lat", null));
         cacheDongLon = parseDoubleOrNaN(sp.getString("weather_area_lon", null));
@@ -366,6 +370,7 @@ public class OverlayService extends Service {
         mode = activeMode();
         if (ORI_OFF.equals(sp.getString(mk(KEY_ORI), "h"))) {
             removeDock();   // 꺼짐: 보이지 않는 창이 터치를 막지 않도록 창 자체를 없앤다
+            if (parkingPhotoEnabled()) startVehicle();
             return;
         }
         lp.x = sp.getInt(mk(KEY_X), d(24));
@@ -690,7 +695,7 @@ public class OverlayService extends Service {
             }
         });
 
-        if (hasVehWidget) startVehicle();
+        if (hasVehWidget || parkingPhotoEnabled()) startVehicle();
     }
 
     /** 재구성되는 가로/세로 독의 스크롤 위치를 현재 모드 기준으로 보관한다. */
@@ -1678,6 +1683,7 @@ public class OverlayService extends Service {
         final EfficiencyTracker sessionTracker = new EfficiencyTracker(sp);
         vehicle = sessionVehicle;
         efficiencyTracker = sessionTracker;
+        lastObservedGear = null;
         vehThread = new HandlerThread("veh");
         vehThread.start();
         final Handler sessionHandler = new Handler(vehThread.getLooper());
@@ -1708,7 +1714,10 @@ public class OverlayService extends Service {
             public void run() {
                 if (vehicle != sessionVehicle || vehHandler != sessionHandler) return;
                 if (!sessionVehicle.isConnected()) sessionVehicle.connect(getApplicationContext());
-                final Map<String, String> vals = readVehicle(sessionVehicle, sessionTracker);
+                String gear = sessionVehicle.isConnected() ? sessionVehicle.gear() : null;
+                detectParkingTransition(gear);
+                final Map<String, String> vals = readVehicle(
+                        sessionVehicle, sessionTracker, gear);
                 ui.post(() -> {
                     if (vehicle != sessionVehicle) return;
                     for (Map.Entry<String, TextView> e : vehValues.entrySet()) {
@@ -1850,12 +1859,12 @@ public class OverlayService extends Service {
         return sb;
     }
 
-    private Map<String, String> readVehicle(VehicleInfo vehicle, EfficiencyTracker tracker) {
+    private Map<String, String> readVehicle(VehicleInfo vehicle, EfficiencyTracker tracker,
+                                            String gear) {
         Map<String, String> m = new LinkedHashMap<>();
         if (!vehicle.isConnected()) return m;
         if (vehValues.containsKey(ShortcutStore.KEY_V_GEAR)) {
-            String g = vehicle.gear();
-            if (g != null) m.put(ShortcutStore.KEY_V_GEAR, g);
+            if (gear != null) m.put(ShortcutStore.KEY_V_GEAR, gear);
         }
         if (vehValues.containsKey(ShortcutStore.KEY_V_BATTERY)) {
             Integer b = vehicle.batteryPercent();
@@ -1877,7 +1886,7 @@ public class OverlayService extends Service {
             VehicleInfo.FloatSample power = vehicle.chargeRateSample();
             tracker.sample(
                     SystemClock.elapsedRealtime(),
-                    vehicle.gear(),
+                    gear,
                     vehicle.speedMps(),
                     power.value,
                     power.timestampNanos,
@@ -1892,6 +1901,22 @@ public class OverlayService extends Service {
             putEfficiency(m, ShortcutStore.KEY_V_EFF, efficiency);
         }
         return m;
+    }
+
+    private boolean parkingPhotoEnabled() {
+        return sp != null && sp.getBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, false);
+    }
+
+    /** 최초 관측값은 기준으로만 삼고, 실제 D/R → P 전환에만 한 번 촬영한다. */
+    private void detectParkingTransition(String gear) {
+        if (gear == null) return;
+        String previous = lastObservedGear;
+        lastObservedGear = gear;
+        if (!parkingPhotoEnabled()) return;
+        if (ParkingPhotoManager.isParkingTransition(previous, gear)
+                && parkingPhotoManager != null) {
+            parkingPhotoManager.captureAndUpload();
+        }
     }
 
     private void putEfficiency(Map<String, String> values, String key, Float efficiency) {
@@ -1916,6 +1941,12 @@ public class OverlayService extends Service {
             vehicle = null;
         }
         efficiencyTracker = null;
+        lastObservedGear = null;
+    }
+
+    void testParkingPhoto() {
+        if (parkingPhotoManager == null) parkingPhotoManager = new ParkingPhotoManager(this);
+        parkingPhotoManager.captureAndUpload();
     }
 
     // ---------------------------------------------------------------- 바로가기
@@ -2343,13 +2374,17 @@ public class OverlayService extends Service {
     // ---------------------------------------------------------------- 전경 서비스
 
     private void startForegroundSafely() {
-        NotificationManager nm = getSystemService(NotificationManager.class);
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
                     CH_ID, "독", NotificationManager.IMPORTANCE_MIN);
-            nm.createNotificationChannel(ch);
+            if (nm != null) nm.createNotificationChannel(ch);
+            builder = new Notification.Builder(this, CH_ID);
+        } else {
+            builder = new Notification.Builder(this);
         }
-        Notification n = new Notification.Builder(this, CH_ID)
+        Notification n = builder
                 .setContentTitle("독 실행 중")
                 .setSmallIcon(android.R.drawable.ic_menu_rotate)
                 .setOngoing(true)
@@ -2641,6 +2676,7 @@ public class OverlayService extends Service {
         ui.removeCallbacks(musicTick);
         ui.removeCallbacks(hazardTick);
         stopVehicle();
+        if (parkingPhotoManager != null) parkingPhotoManager.stop();
         stopMediaCallbacks();
         stopDisplayAreaTracking();
         stopShortcutAddedTracking();

@@ -48,6 +48,7 @@ public class ShortcutStore {
     static final int DEFAULT_DOCK_BORDER_COLOR = 0x55FFFFFF;
     static final int DEFAULT_DOCK_BORDER_WIDTH = 1;
     static final String KEY_AUTOSTART = "autostart"; // 시동(부팅) 시 자동 실행
+    static final String KEY_PARKING_PHOTO_ENABLED = "parking_photo_enabled";
     static final String KEY_DARK = "widget_dark";    // 위젯 다크 모드 (바로가기는 제외)
     static final String KEY_WIDGET_HEADER_ON = "widget_header_on"; // 위젯 상단 라벨 표시
     static final String KEY_WIDGET_FOOTER_ON = "widget_footer_on"; // 위젯 하단 정보 표시
