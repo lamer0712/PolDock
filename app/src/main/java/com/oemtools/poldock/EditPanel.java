@@ -965,7 +965,7 @@ public class EditPanel {
         card.addView(enabledRow);
 
         card.addView(Ui.fieldLabel(c,
-                "Camera ID 0으로 사진 한 장을 찍어 MYBOX의 PolDock 폴더에 전송합니다. "
+                "Camera ID 0으로 사진 한 장을 찍어 MYBOX의 PolDock 폴더에 전송합니다.\n"
                         + "날짜_시각.png로 보관하고 latest.png도 최신 사진으로 갱신합니다."));
 
         TextView tokenButton = Ui.button(c,
