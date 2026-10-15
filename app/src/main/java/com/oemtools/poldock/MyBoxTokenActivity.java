@@ -57,7 +57,7 @@ public class MyBoxTokenActivity extends Activity {
         ScrollView guideScroll = new ScrollView(this);
         guideScroll.setVerticalScrollBarEnabled(false);
         TextView guide = new TextView(this);
-        guide.setText("1. 우상단 MYBOX 로그인 버튼을 누르고 로그인\n"
+        guide.setText("1. MYBOX 페이지에서 우상단 로그인 버튼으로 네이버 로그인\n"
                 + "2. 좌하단 설정 → 계정 및 개인 액세스 토큰 관리 클릭\n"
                 + "3. 화면 중간의 토큰 생성 클릭\n"
                 + "4. 이름은 아무거나 입력하고 유효기간은 최대로 선택\n"
