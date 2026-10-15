@@ -5,6 +5,8 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -78,6 +80,11 @@ final class ParkingPhotoManager {
     static boolean isParkingTransition(String previousGear, String currentGear) {
         return "P".equals(currentGear)
                 && ("D".equals(previousGear) || "R".equals(previousGear));
+    }
+
+    static String captureFileName(Date capturedAt) {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                .format(capturedAt) + ".png";
     }
 
     private synchronized void ensureThread() {
@@ -203,15 +210,22 @@ final class ParkingPhotoManager {
             buffer.get(jpeg);
             image.close();
             image = null;
-            String fileName = "PolDock_parking_" + new SimpleDateFormat(
-                    "yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".jpg";
+            String fileName = captureFileName(new Date());
             File directory = new File(context.getCacheDir(), "parking-photos");
             if (!directory.exists() && !directory.mkdirs()) {
                 throw new IllegalStateException("임시 폴더 생성 실패");
             }
             photo = new File(directory, fileName);
             try (FileOutputStream output = new FileOutputStream(photo)) {
-                output.write(jpeg);
+                Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+                try {
+                    if (bitmap == null
+                            || !bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw new IllegalStateException("PNG 변환 실패");
+                    }
+                } finally {
+                    if (bitmap != null) bitmap.recycle();
+                }
             }
             closeCameraResources();
             updateStatus("MYBOX 전송 중…");
