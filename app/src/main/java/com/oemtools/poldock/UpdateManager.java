@@ -38,6 +38,7 @@ final class UpdateManager {
     static final String EXTRA_VERSION = "update_version";
     static final String EXTRA_URL = "update_url";
     static final String EXTRA_ASSET = "update_asset";
+    static final String EXTRA_DOWNLOAD_ID = "update_download_id";
 
     static final String KEY_DOWNLOAD_ID = "ota_download_id";
     static final String KEY_DOWNLOAD_PATH = "ota_download_path";
@@ -257,23 +258,44 @@ final class UpdateManager {
     static final String APK_MIME = "application/vnd.android.package-archive";
     private static final String DOWNLOADS_AUTHORITY = "com.android.providers.downloads.documents";
 
-    /**
-     * 다운로드 완료 후 열 화면. PolDock이 설치 출처로 허용돼 있으면 설치 화면을 바로 띄우고,
-     * 아니면 다운로드 폴더를 파일 관리자(탐색) 모드로 연다. 차량 설정에는 출처 허용 화면이
-     * 없어 설치 화면을 바로 띄우면 막히지만, 파일 관리자에서 누르면 정상 설치된다.
-     * 선택기(OPEN_DOCUMENT)는 고른 결과를 받을 곳이 없어 마지막 수단으로만 쓴다.
-     */
+    /** 다운로드 완료 알림에서 권한 확인 후 설치까지 이어 주는 내부 화면. */
     static Intent installOrBrowseIntent(Context context, long downloadId) {
+        return new Intent(context, UpdateInstallActivity.class)
+                .putExtra(EXTRA_DOWNLOAD_ID, downloadId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    /** DownloadManager의 content URI를 Android 패키지 설치 화면으로 넘긴다. */
+    static Intent directInstallIntent(Context context, long downloadId) {
         DownloadManager manager = (DownloadManager) context.getSystemService(
                 Context.DOWNLOAD_SERVICE);
         Uri apk = manager == null ? null : manager.getUriForDownloadedFile(downloadId);
-        if (apk != null && canInstallDirectly(context)) {
+        if (apk != null) {
             Intent install = new Intent(Intent.ACTION_VIEW)
                     .setDataAndType(apk, APK_MIME)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             if (resolves(context, install)) return install;
         }
+        return null;
+    }
+
+    /** PolDock의 '이 출처 허용' 설정 화면. 차량 ROM에 화면이 없으면 null. */
+    static Intent unknownSourcesIntent(Context context) {
+        if (Build.VERSION.SDK_INT < 26) return null;
+        Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + context.getPackageName()));
+        android.content.pm.ResolveInfo resolved = context.getPackageManager()
+                .resolveActivity(intent, 0);
+        if (resolved == null || resolved.activityInfo == null) return null;
+        // AAOS 에뮬레이터는 미지원 안내만 띄우는 스텁을 실제 설정 화면처럼 등록한다.
+        if ("com.android.car.frameworkpackagestubs".equals(
+                resolved.activityInfo.packageName)) return null;
+        intent.setClassName(resolved.activityInfo.packageName, resolved.activityInfo.name);
+        return intent;
+    }
+
+    /** 설치 권한 화면이 없는 ROM에서만 사용하는 마지막 폴더 열기 수단. */
+    static Intent browseDownloadsIntent(Context context) {
         if (Build.VERSION.SDK_INT >= 26) {
             Intent browse = new Intent(Intent.ACTION_VIEW)
                     .setDataAndType(DocumentsContract.buildRootUri(DOWNLOADS_AUTHORITY, "downloads"),
@@ -288,7 +310,7 @@ final class UpdateManager {
      * 설치 화면이 PolDock을 출처로 받아줄지 확인한다. targetSdk 22라 canRequestPackageInstalls()는
      * 항상 false이므로, 설치 관리자가 실제로 보는 app op를 직접 확인한다.
      */
-    private static boolean canInstallDirectly(Context context) {
+    static boolean canInstallDirectly(Context context) {
         if (Build.VERSION.SDK_INT < 26) return true;
         try {
             android.app.AppOpsManager ops = (android.app.AppOpsManager)
