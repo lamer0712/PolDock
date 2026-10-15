@@ -205,6 +205,19 @@ final class HolidayStore {
     static int DAY_RED = 0xFFFF3B30;
     static int DAY_BLUE = 0xFF0A84FF;
 
+    /**
+     * 날짜 뷰에 한 줄로 들어가도록 긴 공휴일 이름을 축약한다(최대 6글자).
+     * 과거·미래 데이터를 조사해 6글자를 넘는 이름만 매핑한다.
+     */
+    static String shortName(String name) {
+        if (name == null) return "";
+        if (name.startsWith("대체공휴일")) return "대체공휴일";
+        if (name.startsWith("임시공휴일")) return "임시공휴일";
+        if ("전국동시지방선거".equals(name)) return "지방선거";
+        if ("국회의원선거일".equals(name)) return "국회의원선거";
+        return name;
+    }
+
     static int colorFor(int dayOfWeek, boolean holiday, int def) {
         if (holiday || dayOfWeek == Calendar.SUNDAY) return DAY_RED;
         if (dayOfWeek == Calendar.SATURDAY) return DAY_BLUE;

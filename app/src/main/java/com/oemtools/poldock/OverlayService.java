@@ -868,9 +868,7 @@ public class OverlayService extends Service {
             if (dateHolidayName != null) {   // 숫자 아래 공휴일 이름(있을 때만, 기본색)
                 String hn = HolidayStore.nameFor(this, dc);
                 if (hn != null) {
-                    // 대체공휴일(삼일절) 등은 간략히 "대체공휴일"로만 표시
-                    if (hn.startsWith("대체공휴일")) hn = "대체공휴일";
-                    dateHolidayName.setText(hn);
+                    dateHolidayName.setText(HolidayStore.shortName(hn));
                     dateHolidayName.setVisibility(View.VISIBLE);
                 } else {
                     dateHolidayName.setVisibility(View.GONE);
