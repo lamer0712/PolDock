@@ -59,6 +59,7 @@ import java.util.Map;
 /** 떠다니는 도크. 모든 위젯을 iOS 기하(코너 22.37%)의 둥근 사각 타일로 아이콘화. */
 public class OverlayService extends Service {
 
+    private static final String TAG = "PolDock";
     private static final String CH_ID = "mirror_fold_overlay";
     private static final String KEY_X = "x";
     private static final String KEY_Y = "y";
@@ -126,6 +127,8 @@ public class OverlayService extends Service {
     // 재생성 시 즉시 보여줄 마지막 값 캐시 (깜빡임 방지)
     private Integer cacheTempC;
     private String cacheDong;          // 현위치 읍/면/동
+    private double cacheDongLat = Double.NaN;
+    private double cacheDongLon = Double.NaN;
     private TextView weatherHeader;    // 날씨 타일 헤더(동)
     private WeatherIcon.Kind cacheKind;
     private int cachePm10 = -2, cachePm25 = -2;
@@ -272,6 +275,9 @@ public class OverlayService extends Service {
         super.onCreate();
         isRunning = true;
         sp = getSharedPreferences(ShortcutStore.PREF, MODE_PRIVATE);
+        cacheDong = sp.getString("weather_area_name", null);
+        cacheDongLat = parseDoubleOrNaN(sp.getString("weather_area_lat", null));
+        cacheDongLon = parseDoubleOrNaN(sp.getString("weather_area_lon", null));
         // 편집 중 강제한 모드가 전원 종료로 남아도 다음 실행은 실제 화면을 따라간다.
         sp.edit()
                 .putBoolean(ShortcutStore.KEY_HOME_PROFILE, true)
@@ -1325,22 +1331,20 @@ public class OverlayService extends Service {
                 return;
             }
             if (weather) {
-                try {   // 현위치 읍/면/동 역지오코딩 (키 불필요)
-                    Geocoder gc = new Geocoder(this, Locale.KOREA);
-                    java.util.List<Address> addrs =
-                            gc.getFromLocation(loc.getLatitude(), loc.getLongitude(), 1);
-                    if (addrs != null && !addrs.isEmpty()) {
-                        Address a = addrs.get(0);
-                        String dong = a.getSubLocality();   // 보통 읍/면/동
-                        if (dong == null || dong.isEmpty()) dong = a.getThoroughfare();
-                        if (dong == null || dong.isEmpty()) dong = a.getLocality();
-                        if (dong != null && !dong.isEmpty()) {
-                            final String d = dong;
-                            cacheDong = d;
-                            ui.post(() -> { if (weatherHeader != null) weatherHeader.setText(d); });
-                        }
+                if (needsAreaRefresh(loc)) {
+                    String dong = resolveAreaName(loc);
+                    if (dong != null && !dong.isEmpty()) {
+                        cacheDong = dong;
+                        cacheDongLat = loc.getLatitude();
+                        cacheDongLon = loc.getLongitude();
+                        sp.edit()
+                                .putString("weather_area_name", dong)
+                                .putString("weather_area_lat", String.valueOf(cacheDongLat))
+                                .putString("weather_area_lon", String.valueOf(cacheDongLon))
+                                .apply();
+                        final String d = dong;
+                        ui.post(() -> { if (weatherHeader != null) weatherHeader.setText(d); });
                     }
-                } catch (Throwable ignored) {
                 }
                 try {
                     String j = httpGet("https://api.open-meteo.com/v1/forecast?latitude="
@@ -1373,6 +1377,72 @@ public class OverlayService extends Service {
                 }
             }
         }).start();
+    }
+
+    /** 마지막 주소에서 충분히 이동한 경우에만 역지오코딩을 다시 한다. */
+    private boolean needsAreaRefresh(Location loc) {
+        if (cacheDong == null || cacheDong.isEmpty()
+                || Double.isNaN(cacheDongLat) || Double.isNaN(cacheDongLon)) return true;
+        float[] distance = new float[1];
+        Location.distanceBetween(cacheDongLat, cacheDongLon,
+                loc.getLatitude(), loc.getLongitude(), distance);
+        return distance[0] >= 1500f;
+    }
+
+    /** OSM 역지오코딩을 우선 사용하고, 실패할 때만 차량 내장 Geocoder로 보완한다. */
+    private String resolveAreaName(Location loc) {
+        try {
+            String url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2"
+                    + "&lat=" + loc.getLatitude() + "&lon=" + loc.getLongitude()
+                    + "&zoom=18&addressdetails=1&accept-language=ko";
+            JSONObject address = new JSONObject(httpGet(url)).optJSONObject("address");
+            if (address != null) {
+                String name = firstJsonText(address, "neighbourhood", "quarter", "suburb",
+                        "village", "town", "city_district", "city", "county", "road");
+                if (name != null) return name;
+            }
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "OSM reverse geocoder failed", t);
+        }
+        try {
+            if (Geocoder.isPresent()) {
+                Geocoder gc = new Geocoder(this, Locale.KOREA);
+                java.util.List<Address> addrs =
+                        gc.getFromLocation(loc.getLatitude(), loc.getLongitude(), 1);
+                if (addrs != null && !addrs.isEmpty()) {
+                    Address a = addrs.get(0);
+                    return firstNonEmpty(a.getSubLocality(), a.getThoroughfare(),
+                            a.getLocality(), a.getSubAdminArea(), a.getAdminArea());
+                }
+            }
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "Vehicle geocoder failed", t);
+        }
+        return null;
+    }
+
+    private String firstJsonText(JSONObject object, String... keys) {
+        for (String key : keys) {
+            String value = object.optString(key, "").trim();
+            if (!value.isEmpty()) return value;
+        }
+        return null;
+    }
+
+    private String firstNonEmpty(String... values) {
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) return value.trim();
+        }
+        return null;
+    }
+
+    private double parseDoubleOrNaN(String value) {
+        if (value == null) return Double.NaN;
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            return Double.NaN;
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -1421,6 +1491,9 @@ public class OverlayService extends Service {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(8000);
         c.setReadTimeout(8000);
+        c.setRequestProperty("User-Agent", "PolDock/" + BuildConfig.VERSION_NAME
+                + " (https://github.com/lamer0712/PolDock)");
+        c.setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9");
         try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
             StringBuilder sb = new StringBuilder();
             String line;
