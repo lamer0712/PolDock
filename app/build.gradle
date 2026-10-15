@@ -8,6 +8,19 @@ def configuredGithubRepository = providers.gradleProperty('poldock.githubReposit
 def configuredVersionCode = providers.gradleProperty('poldock.versionCode').getOrElse('1')
 def configuredVersionName = providers.gradleProperty('poldock.versionName').getOrElse('1.0')
 
+// 공휴일 API 키는 저장소에 올리지 않는다: local.properties(poldock.holidayApiKey)
+// 또는 환경변수 POLDOCK_HOLIDAY_API_KEY 에서 읽는다. 없으면 빈 값(기능 비활성).
+def holidayApiKey = ''
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    def localProps = new Properties()
+    localPropsFile.withInputStream { localProps.load(it) }
+    holidayApiKey = localProps.getProperty('poldock.holidayApiKey', '')
+}
+if (!holidayApiKey) {
+    holidayApiKey = providers.environmentVariable('POLDOCK_HOLIDAY_API_KEY').getOrElse('')
+}
+
 def githubRepository = configuredGithubRepository
 if (!githubRepository) {
     def remote = providers.exec {
@@ -32,6 +45,8 @@ android {
         versionName configuredVersionName
         buildConfigField 'String', 'GITHUB_REPOSITORY',
                 '"' + githubRepository.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        buildConfigField 'String', 'HOLIDAY_API_KEY',
+                '"' + holidayApiKey.replace('\\', '\\\\').replace('"', '\\"') + '"'
     }
 
     buildFeatures {

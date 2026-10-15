@@ -96,7 +96,7 @@ public class OverlayService extends Service {
     private long gridPhotoModified;
     private String gridPhotoConfig;
     private LinearLayout shortcutRow;
-    private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay;
+    private TextView timeView, timeAmPm, tempView, dustView, dateWeekday, dateDay, dateHolidayName;
     private MonthCalendarView dateCalendarView;
     private TextView speedLabel;
     private final Map<String, TextView> effLabels = new LinkedHashMap<>();
@@ -139,7 +139,14 @@ public class OverlayService extends Service {
     private final Handler ui = new Handler(Looper.getMainLooper());
     /** 시동 직후에는 네트워크가 늦게 붙으므로 잠시 뒤 OTA를 확인한다. */
     private static final long UPDATE_CHECK_DELAY_MS = 60_000L;
-    private final Runnable updateCheck = () -> UpdateManager.checkForUpdateIfDue(this);
+    private final Runnable updateCheck = () -> {
+        UpdateManager.checkForUpdateIfDue(this);
+        // 공휴일도 OTA 확인과 같은 시점에 하루 1회 갱신. 받으면 달력/날짜 색을 다시 칠한다.
+        HolidayStore.refreshIfDue(this, () -> ui.post(() -> {
+            if (dateCalendarView != null) dateCalendarView.setHolidays(HolidayStore.get(this));
+            updateClock();
+        }));
+    };
 
     private VehicleInfo vehicle;
     private EfficiencyTracker efficiencyTracker;
@@ -189,6 +196,7 @@ public class OverlayService extends Service {
                 }
                 if (ShortcutStore.KEY_AUTOSTART.equals(key)) return;   // 재구성 불필요
                 if (UpdateManager.isInternalPreference(key)) return;
+                if (HolidayStore.isInternalPreference(key)) return;   // 공휴일 캐시는 재구성 불필요
                 if (EfficiencyTracker.isInternalPreference(key)) return;
                 if (ShortcutStore.KEY_DATE_CALENDAR.equals(key)) return; // 제자리 전환
                 if (ShortcutStore.KEY_TIME_ANALOG.equals(key)) return; // 제자리 전환 (재구성 불필요)
@@ -756,12 +764,19 @@ public class OverlayService extends Service {
         date.setGravity(Gravity.CENTER);
         dateWeekday = tileText(side * 0.20f, wLabel(), false);   // 요일 (위, 라벨)
         dateDay = valueText(side);                              // 날짜 (아래, 값)
+        // 공휴일 이름 (숫자 아래, 요일보다 작은 글씨). 기존 레이아웃은 유지하고 한 줄만 추가.
+        dateHolidayName = tileText(side * 0.15f, HolidayStore.DAY_RED, false);
+        dateHolidayName.setMaxLines(1);
+        dateHolidayName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        dateHolidayName.setVisibility(View.GONE);
         date.addView(dateWeekday);
         date.addView(dateDay);
+        date.addView(dateHolidayName);
         tile.addView(date, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
 
         dateCalendarView = new MonthCalendarView(this);
         dateCalendarView.setColors(wFg(), wLabel(), Ui.ACCENT);
+        dateCalendarView.setHolidays(HolidayStore.get(this));
         int inset = Math.max(1, Math.round(side * 0.04f));
         FrameLayout.LayoutParams calendarLp = new FrameLayout.LayoutParams(
                 side - inset * 2, side - inset * 2, Gravity.CENTER);
@@ -841,6 +856,22 @@ public class OverlayService extends Service {
             Date now = new Date();
             dateWeekday.setText(new SimpleDateFormat("E", Locale.getDefault()).format(now));
             dateDay.setText(new SimpleDateFormat("d", Locale.getDefault()).format(now));
+            // 날짜 뷰도 색 규칙 적용: 공휴일/일요일=빨강, 토요일=파랑, 평일=기본색
+            java.util.Calendar dc = java.util.Calendar.getInstance();
+            dc.setTime(now);
+            int dow = dc.get(java.util.Calendar.DAY_OF_WEEK);
+            boolean holiday = HolidayStore.isHoliday(this, dc);
+            // 요일 글씨만 색 규칙 적용(숫자는 기본색 유지).
+            dateWeekday.setTextColor(HolidayStore.colorFor(dow, holiday, wLabel()));
+            if (dateHolidayName != null) {   // 숫자 아래 공휴일 이름(있을 때만)
+                String hn = HolidayStore.nameFor(this, dc);
+                if (hn != null) {
+                    dateHolidayName.setText(hn);
+                    dateHolidayName.setVisibility(View.VISIBLE);
+                } else {
+                    dateHolidayName.setVisibility(View.GONE);
+                }
+            }
             if (dateCalendarView != null) dateCalendarView.setDate(now);
         }
         if (timeView != null) {
