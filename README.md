@@ -103,8 +103,8 @@ app/build/outputs/apk/release/app-release.apk
 
 ```properties
 poldock.githubRepository=lamer0712/PolDock
-poldock.versionCode=21
-poldock.versionName=1.3.17
+poldock.versionCode=22
+poldock.versionName=1.3.18
 ```
 
 현재 프로젝트의 release 빌드는 개인 사이드로드 편의를 위해 debug 서명을 사용합니다. 별도 환경에서 빌드한 APK는 서명이 달라 기존 배포본 위에 설치되지 않을 수 있습니다. 정식 배포 체계로 전환할 때는 전용 키와 안전한 서명 설정이 필요합니다.
