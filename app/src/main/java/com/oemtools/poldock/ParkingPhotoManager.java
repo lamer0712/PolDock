@@ -3,7 +3,6 @@ package com.oemtools.poldock;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -39,7 +38,6 @@ final class ParkingPhotoManager {
     private static final long MAX_PREFERRED_PIXELS = 4_000_000L;
 
     private final Context context;
-    private final SharedPreferences preferences;
     private final AtomicBoolean busy = new AtomicBoolean();
     private HandlerThread thread;
     private Handler handler;
@@ -50,7 +48,6 @@ final class ParkingPhotoManager {
 
     ParkingPhotoManager(Context context) {
         this.context = context.getApplicationContext();
-        preferences = context.getSharedPreferences(ShortcutStore.PREF, Context.MODE_PRIVATE);
     }
 
     boolean isBusy() {
@@ -110,7 +107,7 @@ final class ParkingPhotoManager {
         try {
             CameraManager manager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
             if (manager == null || !Arrays.asList(manager.getCameraIdList()).contains(CAMERA_ID)) {
-                fail("Camera ID 0을 찾을 수 없습니다", null);
+                startScreenCaptureFallback();
                 return;
             }
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(CAMERA_ID);
@@ -118,7 +115,7 @@ final class ParkingPhotoManager {
                     characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG);
             if (sizes == null || sizes.length == 0) {
-                fail("Camera ID 0이 사진 촬영을 지원하지 않습니다", null);
+                startScreenCaptureFallback();
                 return;
             }
             Size size = chooseSize(sizes);
@@ -130,6 +127,20 @@ final class ParkingPhotoManager {
             handler.postDelayed(timeout, CAPTURE_TIMEOUT_MS);
         } catch (Exception e) {
             fail("카메라를 열 수 없습니다", e);
+        }
+    }
+
+    /** 카메라가 없는 에뮬레이터에서는 사용자 승인 후 현재 화면을 대신 전송한다. */
+    private void startScreenCaptureFallback() {
+        closeCameraResources();
+        busy.set(false);
+        updateStatus("카메라 없음 · 화면 캡처 권한 대기…");
+        try {
+            if (!ScreenCaptureActivity.request(context)) {
+                updateStatus("화면 캡처 권한 창이 이미 열려 있습니다");
+            }
+        } catch (RuntimeException e) {
+            fail("화면 캡처를 시작할 수 없습니다", e);
         }
     }
 
@@ -253,7 +264,12 @@ final class ParkingPhotoManager {
     }
 
     private void updateStatus(String status) {
-        preferences.edit().putString(KEY_STATUS, status).apply();
+        setStatus(context, status);
+    }
+
+    static void setStatus(Context context, String status) {
+        context.getSharedPreferences(ShortcutStore.PREF, Context.MODE_PRIVATE)
+                .edit().putString(KEY_STATUS, status).apply();
     }
 
     private void closeCameraResources() {

@@ -997,11 +997,34 @@ public class EditPanel {
         boolean enabled = sp.getBoolean(ShortcutStore.KEY_PARKING_PHOTO_ENABLED, false);
 
         LinearLayout enabledRow = listRow();
-        TextView enabledName = new TextView(c);
-        enabledName.setText("D/R → P 전환 시 촬영·전송");
-        enabledName.setTextColor(supported ? Ui.TEXT : Ui.DIM);
-        enabledName.setTextSize(16);
-        enabledRow.addView(enabledName, new LinearLayout.LayoutParams(
+        int labelColor = supported ? Ui.TEXT : Ui.DIM;
+        LinearLayout enabledLabel = new LinearLayout(c);
+        enabledLabel.setOrientation(LinearLayout.HORIZONTAL);
+        enabledLabel.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView fromGear = new TextView(c);
+        fromGear.setText("D/R");
+        fromGear.setTextColor(labelColor);
+        fromGear.setTextSize(16);
+        enabledLabel.addView(fromGear);
+
+        TextView gearArrow = new TextView(c);
+        gearArrow.setText("->");
+        gearArrow.setTextColor(labelColor);
+        gearArrow.setTextSize(24);
+        gearArrow.setIncludeFontPadding(false);
+        gearArrow.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(
+                Ui.dp(c, 34), Ui.dp(c, 32));
+        enabledLabel.addView(gearArrow, arrowLp);
+
+        TextView parkingAction = new TextView(c);
+        parkingAction.setText("P 전환 시 촬영·전송");
+        parkingAction.setTextColor(labelColor);
+        parkingAction.setTextSize(16);
+        enabledLabel.addView(parkingAction);
+
+        enabledRow.addView(enabledLabel, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         enabledRow.addView(Ui.toggleIndicator(c, enabled));
         enabledRow.setOnClickListener(v -> {
